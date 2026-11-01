@@ -13,5 +13,7 @@ test = ["pytest>=8"]
 aoe2-collect = "aoe2coach.cli:main"
 [tool.setuptools.packages.find]
 include = ["aoe2coach*"]
+[tool.setuptools.package-data]
+aoe2coach = ["*.html"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]

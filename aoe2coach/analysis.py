@@ -136,6 +136,21 @@ class Coach:
     def active_alerts(self) -> tuple[Alert, ...]:
         return tuple(sorted(self._active.values(), key=lambda a: a.raised_ms))
 
+    def build_progress(self, state: PlayerState) -> list[tuple[BuildStep, str]]:
+        """Each build step with status 'done', 'alert', 'due' (within grace) or 'pending'."""
+        progress = []
+        for step in self.build_order:
+            if step.id in self._done_steps:
+                status = "done"
+            elif (AlertKind.BUILD_ORDER, step.id) in self._active:
+                status = "alert"
+            elif step.due(state):
+                status = "due"
+            else:
+                status = "pending"
+            progress.append((step, status))
+        return progress
+
     def update(self, state: PlayerState) -> list[AlertEvent]:
         events: list[AlertEvent] = []
         now = state.game_time_ms

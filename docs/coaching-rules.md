@@ -44,6 +44,6 @@ A 2-minute run on a fresh match (CONTROL 1.1.5) stayed silent while the TC train
 
 ## Known limitations
 
-- Several villagers idling together raise one alert each; the dashboard should play at most one sound per burst.
+- Several villagers idling together raise one alert each; the dashboard groups them into one line and plays at most one chime every 2 s.
 - At the 200 population cap, housed / TC-idle alerts are not suppressed yet.
 - Multiple Town Centers each raise their own idle alert; later ages and other civilizations are not yet verified.

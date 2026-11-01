@@ -6,7 +6,7 @@ This is a small Windows-only Python collector for the **AoE2Control Agent Bridge
 
 **Repository:** https://github.com/bryanfelixg/AOE-caddy
 
-The Python package remains `aoe2coach`, with the `aoe2-collect` command. Verified telemetry extractors ([docs/telemetry.md](docs/telemetry.md)) and the coaching rules engine ([docs/coaching-rules.md](docs/coaching-rules.md)) exist; the dashboard and post-game summaries are planned, not implemented.
+The Python package remains `aoe2coach`, with the `aoe2-collect` command. Verified telemetry extractors ([docs/telemetry.md](docs/telemetry.md)), the coaching rules engine ([docs/coaching-rules.md](docs/coaching-rules.md)) and a live local dashboard (`aoe2-collect coach`, Step 8) exist; post-game summaries are planned, not implemented.
 
 ## 1. Windows setup
 
@@ -92,6 +92,28 @@ if ($LASTEXITCODE -ne 0) { throw "Recording failed; inspect the error above." }
 
 Start `record` without `--count` for continuous recording; stop with Ctrl+C. Each CLI invocation opens and closes its own session when needed; only one client can own a player slot at a time. You can also use `.\.venv\Scripts\aoe2-collect.exe ...`.
 
+### Step 8: Live coaching dashboard
+
+With a single-player match running (Steps 4–5), start the coach:
+
+```powershell
+.\.venv\Scripts\python.exe -m aoe2coach coach --player 1
+```
+
+**Confirmation:** the terminal prints `Dashboard: http://127.0.0.1:8765/` and `Recording to data\coach-<time>.jsonl`, and your browser opens the page. The badge turns green **LIVE** and game time follows the game. Click **Enable sound** (one test chime; adjust the volume slider). Idle-TC alerts appear about 1–2 s after production stops; idle villagers after 5 game-seconds. Pausing the game shows **PAUSED**; Ctrl+C stops the coach and the page shows **OFFLINE**.
+
+The coach owns the player's bridge session, so do not run `record` for the same player at the same time. Useful options:
+
+| Option | Effect |
+|---|---|
+| `--no-record` | Coach without saving a recording |
+| `--no-browser` | Do not open the browser automatically |
+| `--port 8766` | Use another port (the page is only served on 127.0.0.1) |
+| `--replay data\coach-<time>.jsonl --speed 4` | Replay a recording through the same rules instead of the game (`--speed 0` = instant) |
+| `--full-recording` | Save every sample in full (see Output format) |
+
+Alert rules are documented in [docs/coaching-rules.md](docs/coaching-rules.md).
+
 ## 2. How it works
 
 ```text
@@ -101,12 +123,14 @@ AoE2:DE [single-player] → CONTROL Agent Bridge V3
                                     |
                       aoe2coach.bridge.ReadOnlyBridge
                                     |
-                       aoe2coach.collector.record
+                       aoe2coach.collector.record ----> timestamped JSONL
                                     |
-                            timestamped JSONL
+              aoe2coach.telemetry.extract -> aoe2coach.analysis.Coach
+                                    |
+              aoe2coach.dashboard (127.0.0.1, Server-Sent Events) -> browser
 ```
 
-Request limit: 1 MiB. Response limit: 16 MiB. The pipe name is `\\.\pipe\AoE2ControlAgentV3.P1` for player 1. A session expires after 30 seconds without a request. The bridge normally serves observation requests on the next game frame (up to 2 seconds). The collector polls at 2 Hz by default, but effective latency may be higher.
+Request limit: 1 MiB. Response limit: 16 MiB. The pipe name is `\\.\pipe\AoE2ControlAgentV3.P1` for player 1. A session expires after 30 seconds without a request. The bridge normally serves observation requests on the next game frame (up to 2 seconds). The collector polls at 2 Hz by default, but effective latency may be higher. While the game is paused the bridge keeps answering with new `sequence` numbers but frozen `game_time_ms`.
 
 ## 3. Output format
 
@@ -116,7 +140,9 @@ Every line is standalone JSON:
 {"captured_at_utc":"2026-10-31T14:00:00+00:00","observation":{"world":1,"sequence":42,"game_time_ms":12345,"information_policy":"player_view","player":{},"entities":[]}}
 ```
 
-The example is a schema illustration, not real telemetry. The collector preserves the complete observation payload; it omits `object_types` and `technologies` catalogs from each observe call to reduce response size. Catalog information returned from `open` isn't persisted yet; retain it in a later version if type normalization needs it.
+The example is a schema illustration, not real telemetry. The collector omits `object_types` and `technologies` catalogs from each observe call to reduce response size. Catalog information returned from `open` isn't persisted.
+
+By default `record` and `coach` save compact recordings: samples whose game time has not advanced since the previous one (a paused game) are not saved, and fog-of-war entities (`access: "position"`, mostly trees and mines out of sight) are dropped from saved rows, which then carry `"omitted_position_only_entities": <count>`. On a real 14-minute session this reduced the file from 436 MB to 113 MB without affecting coaching or replay. Use `--full-recording` to keep the complete payload of every sample.
 
 Deduplication uses `(world, sequence)` within a single recording process. New worlds are automatically detected, so you can record across multiple consecutive matches in one process. The file is appended to, not overwritten; use a unique output path per recording run.
 
@@ -124,7 +150,7 @@ Deduplication uses `(world, sequence)` within a single recording process. New wo
 
 - `ReadOnlyBridge.request` explicitly allows only `status`, `open`, `observe`, `map`, `close`; it cannot send `act` or `query` in this initial prototype.
 - `open` and each `observe` check `information_policy == "player_view"` (the bridge also supports omniscience, which this client rejects).
-- It does not use any external network or upload gameplay data.
+- It does not use any external network or upload gameplay data. The coaching dashboard is served only on 127.0.0.1, rejects requests whose `Host` header is not local, and requires exclusive use of its port.
 - It still relies on a third-party injector in the game. Never assume it is permitted for multiplayer/competitive use.
 - Named-pipe errors 2 and 231 are retried for a bounded interval. The collector reconnects after recoverable session errors. Other remote protocol errors are surfaced rather than silently ignored.
 - Ctrl+C and exceptions trigger a best-effort `close`. If CONTROL crashes or is killed, the bridge will expire the session.
@@ -143,6 +169,10 @@ Deduplication uses `(world, sequence)` within a single recording process. New wo
 | `session_expired`/`invalid_session` | Reconnect occurs automatically in record mode. |
 | `observation_unavailable` | The match may not be running or the player is not in the current match. |
 | Unexpected large response | This prototype disables catalogs per sample. Add an `entity_fields` allowlist if needed. |
+| `Port 8765 ... already in use` | Another coach is still running (check other terminals) or pass `--port`. |
+| Dashboard stuck on STALE | The coach process is running but receives no observations; check its terminal for bridge errors. |
+| Dashboard shows OFFLINE | The coach command stopped; restart it and reload the page. |
+| No sound | Click **Enable sound** after the page loads (browsers block audio until a click) and check the volume slider / Mute. |
 
 ## 6. Tests and limits
 
@@ -188,7 +218,7 @@ Implement these milestones separately, with confirmation and tests at each stage
 
 1. **Verify telemetry — done.** Villager, Town Center (training / researching / housed / idle), resource, and villager-queue signals were verified in live controlled tests; see [docs/telemetry.md](docs/telemetry.md) and `aoe2coach/telemetry.py`. Unit counts (`object_types`) are fetched live periodically, not stored in recordings. Multiple TCs, later ages, and other civilizations are not yet verified.
 2. **Shared analysis — done.** `aoe2coach/analysis.py` raises and clears alert episodes in game time: idle villagers (5 s), idle Town Center (1 s; training or researching counts as busy), housed (1 s), house-soon warnings, stockpiling (above the next age-up cost by 400 in Dark/Feudal, 800 later, for 20 s), and standard 22-pop Scouts build-order reminders. Validated in a live match; see [docs/coaching-rules.md](docs/coaching-rules.md).
-3. **Local browser dashboard beside the game.** Show live advice and connection freshness, with visual and sound alerts once per idle episode (at most one sound per burst of simultaneous alerts). Include sound enable/mute controls and visual fallback for browser autoplay restrictions. Bind to loopback and share a single collection session; do not open another player session for the display.
+3. **Local browser dashboard — done.** `aoe2-collect coach` runs one bridge session, the shared rules, an optional compact recording, and a dark large-text page at 127.0.0.1:8765 with grouped alerts, LIVE/PAUSED/STALE/OFFLINE status, resources with stockpile highlight, and the build-order checklist. A two-tone chime (volume slider, mute) sounds at most once every 2 s, plus a red screen-edge flash. Validated in a live match.
 4. **Post-game summaries.** Reuse the live event rules for idle durations, production gaps, resource alerts, and build-order adherence. Mark incomplete data and verify live/offline parity.
 
 The configured 2 Hz is a polling target, not a delivery guarantee. Game speed and bridge latency affect when alerts arrive; measure a 1-game-second TC rule against game timestamps without promising 1-second wall-clock delivery. No automated gameplay, multiplayer use, cloud telemetry upload, or injected coaching overlay is planned.

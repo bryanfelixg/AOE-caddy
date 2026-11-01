@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AOE-caddy coach</title>
+<style>
+  :root {
+    --bg: #101317; --panel: #1a1f26; --text: #e8edf2; --muted: #8b96a3;
+    --high: #ff5c5c; --medium: #ffb347; --low: #6fb3ff; --ok: #4cd97b; --line: #2a313b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 20px/1.35 "Segoe UI", system-ui, sans-serif; border: 6px solid transparent; min-height: 100vh;
+  }
+  body.flash { border-color: var(--high); }
+  header { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; padding: 12px 16px;
+           background: var(--panel); border-radius: 10px; }
+  .pill { padding: 2px 12px; border-radius: 999px; font-weight: 700; font-size: 18px; }
+  .live { background: var(--ok); color: #06210f; }
+  .stale, .waiting, .connecting, .paused { background: var(--medium); color: #2a1a00; }
+  .replay { background: var(--low); color: #001a33; }
+  .offline { background: var(--high); color: #2a0000; }
+  .stat b { font-size: 24px; }
+  .muted { color: var(--muted); }
+  main { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-top: 16px; }
+  section { background: var(--panel); border-radius: 10px; padding: 14px 16px; }
+  h2 { margin: 0 0 10px; font-size: 16px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  #alerts { list-style: none; margin: 0; padding: 0; }
+  #alerts li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+               padding: 12px 14px; margin-bottom: 8px; border-radius: 8px; border-left: 8px solid; background: #222933; }
+  #alerts li.high { border-color: var(--high); font-size: 30px; font-weight: 700; }
+  #alerts li.medium { border-color: var(--medium); font-size: 24px; }
+  #alerts li.low { border-color: var(--low); font-size: 20px; }
+  #alerts .secs { color: var(--muted); font-size: 18px; white-space: nowrap; }
+  #no-alerts { color: var(--ok); font-size: 26px; font-weight: 600; }
+  #resources { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .res { background: #222933; border-radius: 8px; padding: 10px; text-align: center; }
+  .res .amt { font-size: 32px; font-weight: 700; }
+  .res.stockpiling { outline: 3px solid var(--medium); }
+  .res.stockpiling .amt { color: var(--medium); }
+  #build { list-style: none; margin: 0; padding: 0; }
+  #build li { position: relative; padding: 6px 0 6px 1.6em; border-bottom: 1px solid var(--line); }
+  #build li::before { position: absolute; left: 0; }
+  #build li.done { color: var(--muted); text-decoration: line-through; }
+  #build li.done::before { content: "\2713"; color: var(--ok); }
+  #build li.alert { color: var(--low); font-weight: 700; }
+  #build li.alert::before { content: "\25B6"; }
+  #build li.due::before { content: "\2026"; color: var(--low); }
+  #build li.pending::before { content: "\00B7"; color: var(--muted); }
+  #next { margin-top: 12px; font-size: 22px; }
+  button { font: inherit; font-size: 18px; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line);
+           background: #2a313b; color: var(--text); cursor: pointer; }
+  button.on { background: var(--ok); color: #06210f; }
+  .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  #volume { width: 110px; accent-color: var(--ok); }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <span id="conn" class="pill connecting">CONNECTING</span>
+  <span id="conn-msg" class="muted"></span>
+  <span class="stat">Time <b id="time">--:--</b></span>
+  <span class="stat"><b id="age">-</b></span>
+  <span class="stat">Villagers <b id="vills">-</b></span>
+  <span class="stat">TC <b id="tc">-</b></span>
+  <span class="stat">Pop room <b id="room">-</b></span>
+  <span class="right">
+    <button id="sound" type="button">Enable sound</button>
+    <input id="volume" type="range" min="10" max="100" value="80" title="Alert volume" aria-label="Alert volume" hidden>
+    <button id="mute" type="button" hidden>Mute</button>
+  </span>
+</header>
+<main>
+  <div>
+    <section>
+      <h2>Active alerts</h2>
+      <ul id="alerts"></ul>
+      <div id="no-alerts" hidden>All good - keep it up</div>
+    </section>
+    <section style="margin-top:16px">
+      <h2>Resources</h2>
+      <div id="resources"></div>
+    </section>
+  </div>
+  <section>
+    <h2>Build order - 22-pop Scouts</h2>
+    <ul id="build"></ul>
+    <div id="next"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const STALE_AFTER_S = 3;
+const PAUSED_AFTER_S = 3;
+const BEEP_INTERVAL_MS = 2000;
+let audio = null, muted = false, lastBeep = 0, lastSoundSeq = null, lastView = null, alertKeys = new Set();
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function clock(ms) {
+  const s = Math.floor(ms / 1000);
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
+function tone(freq, start, length, volume) {
+  const osc = audio.createOscillator(), gain = audio.createGain();
+  osc.type = "square";
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(volume, start + 0.01);
+  gain.gain.setValueAtTime(volume, start + length - 0.04);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + length);
+  osc.connect(gain).connect(audio.destination);
+  osc.start(start);
+  osc.stop(start + length + 0.02);
+}
+
+function beep() {
+  if (!audio || muted) return;
+  const now = Date.now();
+  if (now - lastBeep < BEEP_INTERVAL_MS) return;
+  lastBeep = now;
+  const volume = 0.5 * Number($("volume").value) / 100;
+  const t = audio.currentTime;
+  tone(880, t, 0.16, volume);
+  tone(1320, t + 0.2, 0.22, volume);
+}
+
+function flash() {
+  document.body.classList.add("flash");
+  setTimeout(() => document.body.classList.remove("flash"), 700);
+}
+
+function renderConnection(view) {
+  const c = view.connection, conn = $("conn");
+  let status = c.status, label = c.status.toUpperCase(), msg = c.message;
+  if (status === "live" && c.updated_at) {
+    const now = Date.now() / 1000, age = now - c.updated_at;
+    if (age > STALE_AFTER_S) {
+      status = "stale"; label = "STALE";
+      msg = "No new data for " + Math.round(age) + "s - is the bridge running?";
+    } else if (c.game_advanced_at && now - c.game_advanced_at > PAUSED_AFTER_S) {
+      status = "paused"; label = "PAUSED";
+      msg = "Game time not advancing for " + Math.round(now - c.game_advanced_at) + "s";
+    } else { msg = ""; }
+  }
+  conn.className = "pill " + status;
+  conn.textContent = label;
+  $("conn-msg").textContent = msg;
+}
+
+function render(view) {
+  lastView = view;
+  renderConnection(view);
+  const g = view.game;
+  if (g) {
+    $("time").textContent = clock(g.game_time_ms);
+    $("age").textContent = g.age;
+    $("vills").textContent = g.villagers + (g.idle_villagers ? " (" + g.idle_villagers + " idle)" : "");
+    $("tc").textContent = g.town_centers.map((t) => t.state + (t.queue > 0 ? " x" + t.queue : "")).join(", ") || "none";
+    $("room").textContent = g.housing_headroom ?? "-";
+  }
+
+  const list = $("alerts");
+  list.replaceChildren();
+  const keys = new Set();
+  for (const a of view.alerts) {
+    const li = el("li", a.severity);
+    li.append(el("span", "", a.title), el("span", "secs", a.seconds + "s"));
+    list.append(li);
+    keys.add(a.kind + ":" + a.title);
+  }
+  $("no-alerts").hidden = view.alerts.length > 0 || !g;
+  if ([...keys].some((k) => !alertKeys.has(k) && k.split(":")[0] !== "build_order")) flash();
+  alertKeys = keys;
+
+  const res = $("resources");
+  res.replaceChildren();
+  if (view.resources) {
+    for (const [name, r] of Object.entries(view.resources)) {
+      const box = el("div", "res" + (r.stockpiling ? " stockpiling" : ""));
+      box.append(el("div", "muted", name), el("div", "amt", String(r.amount)));
+      res.append(box);
+    }
+  }
+
+  const build = $("build");
+  build.replaceChildren();
+  for (const step of view.build_order) build.append(el("li", step.status, step.message));
+  $("next").textContent = view.next_villager ? "Next villager: " + view.next_villager : "";
+
+  if (lastSoundSeq !== null && view.sound_seq > lastSoundSeq) beep();
+  lastSoundSeq = view.sound_seq;
+}
+
+$("sound").addEventListener("click", () => {
+  if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+  audio.resume();
+  muted = false;
+  $("sound").textContent = "Sound on";
+  $("sound").classList.add("on");
+  $("mute").hidden = false;
+  $("volume").hidden = false;
+  $("mute").textContent = "Mute";
+  lastBeep = 0;
+  beep();
+});
+$("volume").addEventListener("change", () => { lastBeep = 0; beep(); });
+$("mute").addEventListener("click", () => {
+  muted = !muted;
+  $("mute").textContent = muted ? "Unmute" : "Mute";
+  $("sound").textContent = muted ? "Sound muted" : "Sound on";
+  $("sound").classList.toggle("on", !muted);
+});
+
+const source = new EventSource("/events");
+source.onmessage = (e) => render(JSON.parse(e.data));
+source.onerror = () => {
+  $("conn").className = "pill offline";
+  $("conn").textContent = "OFFLINE";
+  $("conn-msg").textContent = "Dashboard server not reachable - is the coach command still running?";
+};
+setInterval(() => { if (lastView && source.readyState === EventSource.OPEN) renderConnection(lastView); }, 1000);
+</script>
+</body>
+</html>
