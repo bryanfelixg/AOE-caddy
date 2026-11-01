@@ -6,7 +6,7 @@ This is a small Windows-only Python collector for the **AoE2Control Agent Bridge
 
 **Repository:** https://github.com/bryanfelixg/AOE-caddy
 
-The Python package remains `aoe2coach`, with the `aoe2-collect` command. Verified telemetry extractors exist ([docs/telemetry.md](docs/telemetry.md)); coaching analysis and a dashboard are planned, not implemented.
+The Python package remains `aoe2coach`, with the `aoe2-collect` command. Verified telemetry extractors ([docs/telemetry.md](docs/telemetry.md)) and the coaching rules engine ([docs/coaching-rules.md](docs/coaching-rules.md)) exist; the dashboard and post-game summaries are planned, not implemented.
 
 ## 1. Windows setup
 
@@ -187,8 +187,8 @@ AoE2:DE single-player -> read-only collector -> local telemetry/catalogs
 Implement these milestones separately, with confirmation and tests at each stage:
 
 1. **Verify telemetry — done.** Villager, Town Center (training / researching / housed / idle), resource, and villager-queue signals were verified in live controlled tests; see [docs/telemetry.md](docs/telemetry.md) and `aoe2coach/telemetry.py`. Unit counts (`object_types`) are fetched live periodically, not stored in recordings. Multiple TCs, later ages, and other civilizations are not yet verified.
-2. **Shared analysis.** Target villager idle episodes lasting **5 game-seconds**, Town Center idle episodes lasting **1 game-second** (training or researching counts as busy), a separate **housed** alert at 1 game-second, plus resource stockpiling and build-order reminders. Confirm stockpile thresholds and a specific build order/civilization before implementing those rules. Test exact thresholds, activity resumption, match resets, missing/stale observations, and pauses.
-3. **Local browser dashboard beside the game.** Show live advice and connection freshness, with visual and sound alerts once per idle episode. Include sound enable/mute controls and visual fallback for browser autoplay restrictions. Bind to loopback and share a single collection session; do not open another player session for the display.
+2. **Shared analysis — done.** `aoe2coach/analysis.py` raises and clears alert episodes in game time: idle villagers (5 s), idle Town Center (1 s; training or researching counts as busy), housed (1 s), house-soon warnings, stockpiling (above the next age-up cost by 400 in Dark/Feudal, 800 later, for 20 s), and standard 22-pop Scouts build-order reminders. Validated in a live match; see [docs/coaching-rules.md](docs/coaching-rules.md).
+3. **Local browser dashboard beside the game.** Show live advice and connection freshness, with visual and sound alerts once per idle episode (at most one sound per burst of simultaneous alerts). Include sound enable/mute controls and visual fallback for browser autoplay restrictions. Bind to loopback and share a single collection session; do not open another player session for the display.
 4. **Post-game summaries.** Reuse the live event rules for idle durations, production gaps, resource alerts, and build-order adherence. Mark incomplete data and verify live/offline parity.
 
 The configured 2 Hz is a polling target, not a delivery guarantee. Game speed and bridge latency affect when alerts arrive; measure a 1-game-second TC rule against game timestamps without promising 1-second wall-clock delivery. No automated gameplay, multiplayer use, cloud telemetry upload, or injected coaching overlay is planned.

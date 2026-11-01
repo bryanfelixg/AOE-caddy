@@ -33,6 +33,14 @@ Only the TC part with `type_id == 109` reports production; the annex parts (618,
 | Housing headroom | `player.housing_headroom` |
 | Villager queue | `object_types` entry `id == 83`: `count` and `count_with_queued` (includes all villager variants). Only present when `observe` requests `object_types: "relevant"` (~200 KB per response), so live analysis fetches it periodically and recordings do not store it. |
 
+## Buildings and units
+
+| Value | Source |
+|---|---|
+| Buildings | Owned entities with `category == 80`; `status` 2 finished, 0 foundation. Verified type IDs: House 70, Barracks 12, Mill 68, Stable 101, Lumber Camp 562, Town Center 109. |
+| Unit counts | Owned entities with `category == 70` (falls back to `object_type`), counted by `type_id`; includes garrisoned units. Scout Cavalry is 448. |
+| Garrisoned villagers | Counted in `villager_count` but excluded from idle checks. |
+
 ## Not yet verified
 
 - Multiple Town Centers, Castle/Imperial Age TC parts, and civilizations with different TC or villager types.

@@ -101,6 +101,24 @@ def test_town_center_foundation_excluded(obs):
     assert extract(obs).town_centers == ()
 
 
+def test_buildings_include_foundations(obs):
+    state = extract(obs)
+    houses = [b for b in state.buildings if b.type_id == 70]
+    assert (sum(b.finished for b in houses), sum(not b.finished for b in houses)) == (5, 2)
+    assert state.has_building(101) and not state.has_building(101, finished_only=True)  # stable foundation
+    assert state.has_building(12, finished_only=True)  # barracks
+
+
+def test_unit_counts_and_garrisoned_villagers(obs):
+    vid = _villager_ids(obs)[0]
+    _entity(obs, vid).update(garrison_object_id=TC_ID, category=None)
+    state = extract(obs)
+    assert state.unit_counts[448] == 1  # scout cavalry
+    assert state.garrisoned_villagers == 1
+    assert state.villager_count == 15
+    assert len(state.villagers) == 14
+
+
 def test_resources_fall_back_to_facts(obs):
     del obs["player"]["attributes"]
     resources = extract(obs).resources
