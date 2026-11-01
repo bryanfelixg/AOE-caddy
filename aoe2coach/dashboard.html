@@ -6,7 +6,8 @@
 <title>AOE-caddy coach</title>
 <style>
   :root {
-    --bg: #101317; --panel: #1a1f26; --text: #e8edf2; --muted: #8b96a3;
+    color-scheme: dark;
+    --bg: #101317; --panel: #1a1f26; --panel2: #222933; --text: #e8edf2; --muted: #8b96a3;
     --high: #ff5c5c; --medium: #ffb347; --low: #6fb3ff; --ok: #4cd97b; --line: #2a313b;
   }
   * { box-sizing: border-box; }
@@ -24,24 +25,34 @@
   .offline { background: var(--high); color: #2a0000; }
   .stat b { font-size: 24px; }
   .muted { color: var(--muted); }
-  main { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-top: 16px; }
+  #notice { margin-top: 12px; padding: 10px 14px; border-radius: 8px; background: #3a2a10; color: var(--medium); }
+  main { display: grid; grid-template-columns: 3fr 2fr; gap: 16px; margin-top: 16px; }
   section { background: var(--panel); border-radius: 10px; padding: 14px 16px; }
   h2 { margin: 0 0 10px; font-size: 16px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
   #alerts { list-style: none; margin: 0; padding: 0; }
   #alerts li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
-               padding: 12px 14px; margin-bottom: 8px; border-radius: 8px; border-left: 8px solid; background: #222933; }
+               padding: 12px 14px; margin-bottom: 8px; border-radius: 8px; border-left: 8px solid; background: var(--panel2); }
   #alerts li.high { border-color: var(--high); font-size: 30px; font-weight: 700; }
   #alerts li.medium { border-color: var(--medium); font-size: 24px; }
   #alerts li.low { border-color: var(--low); font-size: 20px; }
   #alerts .secs { color: var(--muted); font-size: 18px; white-space: nowrap; }
   #no-alerts { color: var(--ok); font-size: 26px; font-weight: 600; }
   #resources { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-  .res { background: #222933; border-radius: 8px; padding: 10px; text-align: center; }
+  .res { background: var(--panel2); border-radius: 8px; padding: 10px; text-align: center; }
   .res .amt { font-size: 32px; font-weight: 700; }
   .res.stockpiling { outline: 3px solid var(--medium); }
   .res.stockpiling .amt { color: var(--medium); }
-  #build { list-style: none; margin: 0; padding: 0; }
-  #build li { position: relative; padding: 6px 0 6px 1.6em; border-bottom: 1px solid var(--line); }
+  #build-name { font-size: 22px; font-weight: 700; }
+  #pending { color: var(--medium); font-size: 16px; margin-top: 4px; }
+  .step { background: var(--panel2); border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+  .step .label { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  #current-task { font-size: 26px; font-weight: 700; }
+  #next-task { font-size: 20px; }
+  .note { color: var(--muted); font-size: 17px; }
+  #age-line { margin-top: 10px; font-size: 18px; }
+  #age-line.behind { color: var(--medium); }
+  #build { list-style: none; margin: 10px 0 0; padding: 0; }
+  #build li { position: relative; padding: 6px 0 6px 1.6em; border-bottom: 1px solid var(--line); font-size: 18px; }
   #build li::before { position: absolute; left: 0; }
   #build li.done { color: var(--muted); text-decoration: line-through; }
   #build li.done::before { content: "\2713"; color: var(--ok); }
@@ -49,12 +60,35 @@
   #build li.alert::before { content: "\25B6"; }
   #build li.due::before { content: "\2026"; color: var(--low); }
   #build li.pending::before { content: "\00B7"; color: var(--muted); }
-  #next { margin-top: 12px; font-size: 22px; }
   button { font: inherit; font-size: 18px; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line);
            background: #2a313b; color: var(--text); cursor: pointer; }
-  button.on { background: var(--ok); color: #06210f; }
+  button.on, button.primary { background: var(--ok); color: #06210f; }
   .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
   #volume { width: 110px; accent-color: var(--ok); }
+  /* settings drawer */
+  #drawer { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); display: flex; justify-content: flex-end; }
+  #drawer[hidden] { display: none; }
+  #panel { width: min(640px, 100%); height: 100%; overflow-y: auto; background: var(--panel); padding: 18px 20px 90px; }
+  #panel h1 { font-size: 24px; margin: 0 0 12px; }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 14px; padding: 8px 12px 10px; }
+  legend { color: var(--muted); font-size: 15px; text-transform: uppercase; letter-spacing: .06em; padding: 0 6px; }
+  .field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 0; font-size: 17px; }
+  .field input[type=number] { width: 110px; font: inherit; padding: 4px 6px; background: var(--panel2); color: var(--text);
+                              border: 1px solid var(--line); border-radius: 6px; }
+  .field input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--ok); }
+  .field.invalid input { border-color: var(--high); }
+  .tag { font-size: 12px; padding: 1px 6px; border-radius: 6px; margin-left: 6px; background: #3a2a10; color: var(--medium); }
+  select { font: inherit; font-size: 17px; width: 100%; padding: 6px; background: var(--panel2); color: var(--text);
+           border: 1px solid var(--line); border-radius: 6px; }
+  #preview { font-size: 16px; margin-top: 8px; max-height: 260px; overflow-y: auto; }
+  #preview ol { margin: 6px 0 0; padding-left: 22px; }
+  #preview li.checked { color: var(--low); }
+  .msg { padding: 8px 10px; border-radius: 6px; margin: 8px 0; font-size: 16px; white-space: pre-wrap; }
+  .msg.err { background: #3a1414; color: #ffb3b3; }
+  .msg.warn { background: #3a2a10; color: var(--medium); }
+  .msg.ok { background: #10301c; color: var(--ok); }
+  #panel-actions { position: fixed; bottom: 0; right: 0; width: min(640px, 100%); padding: 12px 20px;
+                   background: var(--panel); border-top: 1px solid var(--line); display: flex; gap: 10px; justify-content: flex-end; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -69,10 +103,12 @@
   <span class="stat">Pop room <b id="room">-</b></span>
   <span class="right">
     <button id="sound" type="button">Enable sound</button>
-    <input id="volume" type="range" min="10" max="100" value="80" title="Alert volume" aria-label="Alert volume" hidden>
+    <input id="volume" type="range" min="0" max="100" value="80" title="Alert volume" aria-label="Alert volume" hidden>
     <button id="mute" type="button" hidden>Mute</button>
+    <button id="open-settings" type="button" title="Settings" aria-label="Settings">&#9881; Settings</button>
   </span>
 </header>
+<div id="notice" hidden></div>
 <main>
   <div>
     <section>
@@ -86,23 +122,55 @@
     </section>
   </div>
   <section>
-    <h2>Build order - 22-pop Scouts</h2>
+    <h2>Training</h2>
+    <div id="build-name">-</div>
+    <div id="pending" hidden></div>
+    <div class="step"><div class="label">Now</div><div id="current-task">-</div><div id="current-note" class="note"></div></div>
+    <div class="step"><div class="label">Next</div><div id="next-task">-</div><div id="next-note" class="note"></div></div>
+    <div id="age-line"></div>
     <ul id="build"></ul>
-    <div id="next"></div>
   </section>
 </main>
+
+<div id="drawer" hidden>
+  <div id="panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <h1 id="settings-title">Settings</h1>
+    <div id="panel-messages"></div>
+    <fieldset>
+      <legend>Build order</legend>
+      <select id="build-select" aria-label="Build order"></select>
+      <div id="build-hint" class="note"></div>
+      <div id="preview"></div>
+    </fieldset>
+    <form id="settings-form"></form>
+    <div id="file-info" class="note"></div>
+  </div>
+  <div id="panel-actions">
+    <button id="cancel-settings" type="button">Cancel</button>
+    <button id="save-settings" type="button" class="primary">Save</button>
+  </div>
+</div>
+
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
 const STALE_AFTER_S = 3;
 const PAUSED_AFTER_S = 3;
-const BEEP_INTERVAL_MS = 2000;
+const GROUPS = {
+  "alerts.villager_idle": "Idle villager alert", "alerts.tc_idle": "Idle Town Center alert",
+  "alerts.housed": "Housed alert", "alerts.house_soon": "House-soon warning",
+  "alerts.stockpile": "Stockpiling alert", "alerts.build_order": "Build-order reminders",
+  "sound": "Sound", "recording": "Recording", "connection": "Connection",
+};
+const FIELD_LABELS = { enabled: "Enabled", sound: "Play a sound", allow_age_up_savings: "Allow saving for the next age-up",
+                       compact: "Compact recordings" };
 let audio = null, muted = false, lastBeep = 0, lastSoundSeq = null, lastView = null, alertKeys = new Set();
+let sound = { volume: 80, min_gap_s: 2 }, volumeTimer = null, settingsData = null;
 
 function el(tag, cls, text) {
   const node = document.createElement(tag);
   if (cls) node.className = cls;
-  if (text !== undefined) node.textContent = text;
+  if (text !== undefined && text !== null) node.textContent = text;
   return node;
 }
 
@@ -124,13 +192,12 @@ function tone(freq, start, length, volume) {
   osc.stop(start + length + 0.02);
 }
 
-function beep() {
-  if (!audio || muted) return;
+function beep(force) {
+  if (!audio || muted || sound.volume <= 0) return;
   const now = Date.now();
-  if (now - lastBeep < BEEP_INTERVAL_MS) return;
+  if (!force && now - lastBeep < sound.min_gap_s * 1000) return;
   lastBeep = now;
-  const volume = 0.5 * Number($("volume").value) / 100;
-  const t = audio.currentTime;
+  const volume = 0.5 * sound.volume / 100, t = audio.currentTime;
   tone(880, t, 0.16, volume);
   tone(1320, t + 0.2, 0.22, volume);
 }
@@ -158,9 +225,43 @@ function renderConnection(view) {
   $("conn-msg").textContent = msg;
 }
 
+function renderTraining(view) {
+  const t = view.training;
+  if (!t) return;
+  $("build-name").textContent = t.build.name + (t.build.civilizations.length ? " (" + t.build.civilizations.join(", ") + ")" : "");
+  $("pending").hidden = !t.pending;
+  $("pending").textContent = t.pending ? "Switching to " + t.pending + " at the start of the next match" : "";
+  $("current-task").textContent = t.current ? t.current.task : "Start of the build";
+  $("current-note").textContent = t.current ? [t.current.villagers + " villagers, " + t.current.age, t.current.note].filter(Boolean).join(" - ") : "";
+  $("next-task").textContent = t.next ? t.next.task : (t.current ? "Build complete" : "-");
+  $("next-note").textContent = t.next ? [t.next.villagers + " villagers, " + t.next.age, t.next.note].filter(Boolean).join(" - ") : "";
+  const ageLine = $("age-line");
+  ageLine.className = "";
+  if (t.age) {
+    let text = "Age: " + t.age.actual + (t.age.advancing ? " (advancing)" : "");
+    if (t.age.expected !== t.age.actual) {
+      text += " - build expects " + t.age.expected;
+      ageLine.className = "behind";
+    }
+    if (t.age.target) text += " | Next age-up: " + t.age.target;
+    ageLine.textContent = text;
+  } else {
+    ageLine.textContent = "";
+  }
+  const build = $("build");
+  build.replaceChildren();
+  for (const step of view.build_order) build.append(el("li", step.status, step.message));
+}
+
 function render(view) {
   lastView = view;
   renderConnection(view);
+  if (view.sound) {
+    sound = view.sound;
+    if (document.activeElement !== $("volume")) $("volume").value = sound.volume;
+  }
+  $("notice").hidden = !view.notice;
+  $("notice").textContent = view.notice || "";
   const g = view.game;
   if (g) {
     $("time").textContent = clock(g.game_time_ms);
@@ -192,14 +293,17 @@ function render(view) {
       res.append(box);
     }
   }
-
-  const build = $("build");
-  build.replaceChildren();
-  for (const step of view.build_order) build.append(el("li", step.status, step.message));
-  $("next").textContent = view.next_villager ? "Next villager: " + view.next_villager : "";
-
-  if (lastSoundSeq !== null && view.sound_seq > lastSoundSeq) beep();
+  renderTraining(view);
+  if (lastSoundSeq !== null && view.sound_seq > lastSoundSeq) beep(false);
   lastSoundSeq = view.sound_seq;
+}
+
+async function postSettings(body) {
+  const resp = await fetch("/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify(body) });
+  const data = await resp.json().catch(() => ({ errors: ["Unexpected response from the coach"] }));
+  if (!resp.ok) throw data.errors || ["Could not save settings"];
+  return data;
 }
 
 $("sound").addEventListener("click", () => {
@@ -211,15 +315,157 @@ $("sound").addEventListener("click", () => {
   $("mute").hidden = false;
   $("volume").hidden = false;
   $("mute").textContent = "Mute";
-  lastBeep = 0;
-  beep();
+  beep(true);
 });
-$("volume").addEventListener("change", () => { lastBeep = 0; beep(); });
 $("mute").addEventListener("click", () => {
   muted = !muted;
   $("mute").textContent = muted ? "Unmute" : "Mute";
   $("sound").textContent = muted ? "Sound muted" : "Sound on";
   $("sound").classList.toggle("on", !muted);
+});
+$("volume").addEventListener("input", () => { sound = { ...sound, volume: Number($("volume").value) }; });
+$("volume").addEventListener("change", () => {
+  beep(true);
+  clearTimeout(volumeTimer);
+  volumeTimer = setTimeout(() => postSettings({ sound: { volume: Number($("volume").value) } }).catch(() => {}), 300);
+});
+
+// ---- settings drawer ----
+
+function message(kind, text) {
+  const box = el("div", "msg " + kind, text);
+  $("panel-messages").append(box);
+}
+
+function getPath(obj, path) {
+  return path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), obj);
+}
+
+function setPath(obj, path, value) {
+  const parts = path.split(".");
+  let node = obj;
+  for (const part of parts.slice(0, -1)) node = node[part] = node[part] || {};
+  node[parts[parts.length - 1]] = value;
+}
+
+function renderPreview() {
+  const build = (settingsData.builds || []).find((b) => b.id === $("build-select").value);
+  const preview = $("preview");
+  preview.replaceChildren();
+  if (!build) return;
+  const meta = [build.civilizations.join(", "), build.origin === "builtin" ? "built-in" : "your file"]
+    .filter(Boolean).join(" - ");
+  preview.append(el("div", "note", meta));
+  if (build.description) preview.append(el("div", "", build.description));
+  for (const w of build.warnings) preview.append(el("div", "msg warn", w));
+  const ol = el("ol");
+  for (const s of build.steps) {
+    ol.append(el("li", s.checked ? "checked" : "", s.villagers + " vils, " + s.age + ": " + s.task + (s.checked ? "  [checked]" : "")));
+  }
+  preview.append(ol);
+  const active = settingsData.active_build, pending = settingsData.pending_build;
+  let hint = "";
+  if (build.id === active && !pending) hint = "Active now.";
+  else if (build.id === pending) hint = "Starts with the next match.";
+  else if (lastView && lastView.game) hint = "A match is running: a new build order starts with the next match.";
+  $("build-hint").textContent = hint;
+}
+
+function renderSettings() {
+  $("panel-messages").replaceChildren();
+  const d = settingsData;
+  if (d.file_error) message("err", d.file_error + "\nSaving will replace that file.");
+  for (const e of d.build_errors) message("err", "Build order skipped: " + e);
+  if (d.restart_required.length) message("warn", "Restart the coach to apply: " + d.restart_required.join(", "));
+  const select = $("build-select");
+  select.replaceChildren();
+  for (const b of d.builds) {
+    const opt = el("option", "", b.name + (b.origin === "builtin" ? " (built-in)" : ""));
+    opt.value = b.id;
+    select.append(opt);
+  }
+  select.value = d.saved.build_order;
+  if (d.overrides.build_order) message("warn", "This run uses build '" + d.overrides.build_order + "' from the command line.");
+  renderPreview();
+
+  const form = $("settings-form");
+  form.replaceChildren();
+  const sets = {};
+  for (const f of d.schema) {
+    if (f.path === "build_order") continue;
+    const group = f.path.split(".").slice(0, -1).join(".");
+    if (!sets[group]) {
+      sets[group] = el("fieldset");
+      sets[group].append(el("legend", "", GROUPS[group] || group));
+      form.append(sets[group]);
+    }
+    const name = f.path.split(".").pop();
+    const row = el("label", "field");
+    row.dataset.path = f.path;
+    const label = el("span", "", FIELD_LABELS[name] || f.label);
+    if (f.restart) label.append(el("span", "tag", "restart"));
+    if (f.path in d.overrides) label.append(el("span", "tag", "this run: " + d.overrides[f.path]));
+    const input = el("input");
+    input.name = f.path;
+    if (f.type === "bool") {
+      input.type = "checkbox";
+      input.checked = !!getPath(d.saved, f.path);
+    } else {
+      input.type = "number";
+      input.step = f.type === "int" ? "1" : "any";
+      if (f.min !== null) input.min = f.min;
+      if (f.max !== null) input.max = f.max;
+      input.value = getPath(d.saved, f.path);
+      input.title = "Default " + f.default + (f.min !== null ? ", range " + f.min + "-" + f.max : "");
+    }
+    row.append(label, input);
+    sets[group].append(row);
+  }
+  $("file-info").textContent = "Saved to " + d.file + ". Your build orders: " + (d.build_folder || "-") +
+    " (add .toml files there, then reopen settings).";
+}
+
+async function openSettings() {
+  $("drawer").hidden = false;
+  $("panel-messages").replaceChildren();
+  try {
+    settingsData = await (await fetch("/settings")).json();
+    renderSettings();
+  } catch (e) {
+    message("err", "Could not load settings - is the coach still running?");
+  }
+}
+
+function collectSettings() {
+  const body = { build_order: $("build-select").value };
+  for (const input of $("settings-form").querySelectorAll("input")) {
+    input.closest(".field").classList.remove("invalid");
+    setPath(body, input.name, input.type === "checkbox" ? input.checked : Number(input.value));
+  }
+  return body;
+}
+
+$("open-settings").addEventListener("click", openSettings);
+$("cancel-settings").addEventListener("click", () => { $("drawer").hidden = true; });
+$("drawer").addEventListener("click", (e) => { if (e.target === $("drawer")) $("drawer").hidden = true; });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") $("drawer").hidden = true; });
+$("build-select").addEventListener("change", renderPreview);
+$("save-settings").addEventListener("click", async () => {
+  try {
+    const data = await postSettings(collectSettings());
+    settingsData = data;
+    renderSettings();
+    const when = data.build_applies === "next match" ? " The new build order starts with the next match." : "";
+    message("ok", "Saved." + when);
+  } catch (errors) {
+    $("panel-messages").replaceChildren();
+    for (const e of [].concat(errors)) {
+      message("err", String(e));
+      const path = String(e).split(":")[0];
+      const row = $("settings-form").querySelector('[data-path="' + CSS.escape(path) + '"]');
+      if (row) row.classList.add("invalid");
+    }
+  }
 });
 
 const source = new EventSource("/events");

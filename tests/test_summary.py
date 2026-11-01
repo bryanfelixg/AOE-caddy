@@ -5,7 +5,7 @@ from pathlib import Path
 from aoe2coach.analysis import Coach
 from aoe2coach.dashboard import CoachPipeline, Hub
 from aoe2coach.summary import (
-    RecordingReader, clock, default_summary_path, render_html, render_text, summarize, write_summary,
+    MetaRecord, RecordingReader, clock, default_summary_path, render_html, render_text, summarize, write_summary,
 )
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "observation_feudal_p1.json").read_text(encoding="utf-8"))
@@ -152,3 +152,66 @@ def test_coach_stop_summary_failure_is_only_a_warning(tmp_path, caplog):
     from aoe2coach.dashboard import _write_post_game_summary
     _write_post_game_summary(tmp_path / "missing.jsonl")  # must not raise
     assert "Could not write post-game summary" in caplog.text
+
+
+def _meta(build_id, digest=None, settings=None):
+    return MetaRecord({"build": {"id": build_id, "name": build_id, "digest": digest}, "settings": settings or {}})
+
+
+def test_meta_selects_build_and_settings_and_reports_adherence():
+    from aoe2coach.build_orders import Library, default_build, parse
+    build = parse(TEST_BUILD, "test.toml")
+    library = Library({"scouts-22-pop": default_build(), build.id: build}, [])
+    items = [_meta(build.id, build.digest, {"alerts": {"tc_idle": {"threshold_s": 20}}})]
+    items += series(0, 10_000)
+    advancing = obs_at(10_500)
+    advancing["technologies"] = [{"id": 101, "state": 2}]
+    items += [advancing] + series(11_000, 12_000)
+    [m] = summarize(items, library=library)
+    assert m.build_name == "Test build" and m.build_notes == []
+    assert m.tc_idle.count == 0  # recorded 20 s threshold, not the 1 s default
+    up = m.age_ups[2]
+    assert (up.clicked_ms, up.clicked_villagers, up.planned_villagers) == (10_500, 15, 14)
+    stable = next(s for s in m.build_steps if s.id == "stable")
+    assert stable.target_villagers == 10 and stable.done_ms == 0 and stable.done_villagers == 15
+    text = render_text([m])
+    assert "Castle Age: clicked at 0:10 with 15 villagers (plan: 14 villagers)" in text
+    assert "Build order (Test build):" in text and "(plan: 10)" in text
+
+
+def test_meta_notes_for_edited_or_missing_builds():
+    from aoe2coach.build_orders import Library, default_build, parse
+    build = parse(TEST_BUILD, "test.toml")
+    library = Library({"scouts-22-pop": default_build(), build.id: build}, [])
+    [m] = summarize([_meta(build.id, "old-digest")] + series(0, 1_000), library=library)
+    assert any("edited since this recording" in n for n in m.build_notes)
+    [m] = summarize([_meta("deleted")] + series(0, 1_000), library=library)
+    assert any("no longer available" in n for n in m.build_notes) and m.build_name.startswith("22-pop")
+    [m] = summarize(series(0, 1_000), library=library)
+    assert any("no build-order metadata" in n for n in m.build_notes)
+
+
+def test_reader_yields_meta_records(tmp_path):
+    path = tmp_path / "rec.jsonl"
+    path.write_text(json.dumps({"meta": {"build": {"id": "x"}}}) + "\n" + json.dumps({"observation": obs_at(0)}),
+                    encoding="utf-8")
+    items = list(RecordingReader(path))
+    assert isinstance(items[0], MetaRecord) and items[0]["build"]["id"] == "x"
+    assert len(items) == 2
+
+
+TEST_BUILD = """
+format = 1
+id = "test-build"
+name = "Test build"
+[[steps]]
+villagers = 10
+age = "feudal"
+task = "Stable"
+id = "stable"
+build = "Stable"
+[[steps]]
+villagers = 14
+task = "Click Castle"
+age_up = "castle"
+"""

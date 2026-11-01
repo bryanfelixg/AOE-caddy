@@ -6,7 +6,12 @@ This is a small Windows-only Python collector for the **AoE2Control Agent Bridge
 
 **Repository:** https://github.com/bryanfelixg/AOE-caddy
 
-The Python package remains `aoe2coach`, with the `aoe2-collect` command. It includes verified telemetry extractors ([docs/telemetry.md](docs/telemetry.md)), the coaching rules engine ([docs/coaching-rules.md](docs/coaching-rules.md)), a live local dashboard (`aoe2-collect coach`, Step 8) and post-game summaries (`aoe2-collect summary`, Step 9).
+The Python package remains `aoe2coach`, with the `aoe2-collect` command. It includes:
+- verified telemetry extractors ([docs/telemetry.md](docs/telemetry.md));
+- the coaching rules engine ([docs/coaching-rules.md](docs/coaching-rules.md));
+- a live local dashboard (`aoe2-collect coach`, Step 8);
+- settings (Step 9) and selectable build orders ([docs/build-orders.md](docs/build-orders.md), Step 10);
+- post-game summaries (`aoe2-collect summary`, Step 11).
 
 ## 1. Windows setup
 
@@ -14,7 +19,7 @@ Run each step from this repository root in PowerShell. Check the confirmation cu
 
 ### Step 1: Create and select a virtual environment
 
-Install Python >=3.10. Inspect installed versions with `py --list`, then use a supported interpreter:
+Install Python >=3.11. Inspect installed versions with `py --list`, then use a supported interpreter:
 
 ```powershell
 py -3 -m venv .venv
@@ -23,7 +28,7 @@ py -3 -m venv .venv
 
 If `.venv` already exists, inspect and reuse it rather than overwriting it blindly. In VS Code, run **Python: Select Interpreter** and choose `.venv\Scripts\python.exe`.
 
-**Confirmation:** the executable is inside this project's `.venv`, Python is >=3.10, and the isolation check prints `True`. Python 3.14.4 was used for the verified local setup.
+**Confirmation:** the executable is inside this project's `.venv`, Python is >=3.11, and the isolation check prints `True`. Python 3.14.4 was used for the verified local setup.
 
 Optional activation: `.\.venv\Scripts\Activate.ps1`. If execution policy blocks it, keep using the explicit interpreter below; no security-policy change is needed.
 
@@ -97,24 +102,51 @@ Start `record` without `--count` for continuous recording; stop with Ctrl+C. Eac
 With a single-player match running (Steps 4–5), start the coach:
 
 ```powershell
-.\.venv\Scripts\python.exe -m aoe2coach coach --player 1
+.\.venv\Scripts\python.exe -m aoe2coach coach
 ```
 
-**Confirmation:** the terminal prints `Dashboard: http://127.0.0.1:8765/` and `Recording to data\coach-<time>.jsonl`, and your browser opens the page. The badge turns green **LIVE** and game time follows the game. Click **Enable sound** (one test chime; adjust the volume slider). Idle-TC alerts appear about 1–2 s after production stops; idle villagers after 5 game-seconds. Pausing the game shows **PAUSED**; Ctrl+C stops the coach and the page shows **OFFLINE**.
+**Confirmation:** the terminal prints `Dashboard: http://127.0.0.1:8765/`, `Build order: <name>` and `Recording to data\coach-<time>.jsonl`, and your browser opens the page. The badge turns green **LIVE** and game time follows the game. Click **Enable sound** (one test chime; adjust the volume slider). Idle-TC alerts appear about 1–2 s after production stops; idle villagers after 5 game-seconds. The **Training** panel shows the current and next build step, your age vs. the build's, and the checklist. Pausing the game shows **PAUSED**; Ctrl+C stops the coach and the page shows **OFFLINE**.
 
-The coach owns the player's bridge session, so do not run `record` for the same player at the same time. Useful options:
+The coach owns the player's bridge session, so do not run `record` for the same player at the same time. Command-line options override the settings file for one run only:
 
 | Option | Effect |
 |---|---|
+| `--player 2`, `--port 8766`, `--hz 4` | Player slot, dashboard port (served only on 127.0.0.1), polls per second |
+| `--build scouts-into-archers` | Train on another build order for this run |
 | `--no-record` | Coach without saving a recording |
-| `--no-browser` | Do not open the browser automatically |
-| `--port 8766` | Use another port (the page is only served on 127.0.0.1) |
-| `--replay data\coach-<time>.jsonl --speed 4` | Replay a recording through the same rules instead of the game (`--speed 0` = instant) |
 | `--full-recording` | Save every sample in full (see Output format) |
+| `--no-browser` | Do not open the browser automatically |
+| `--replay data\coach-<time>.jsonl --speed 4` | Replay a recording through the same rules instead of the game (`--speed 0` = instant) |
+| `--settings path\to\settings.json` | Use another settings file |
 
 Alert rules are documented in [docs/coaching-rules.md](docs/coaching-rules.md).
 
-### Step 9: Post-game summary
+### Step 9: Settings
+
+Click **⚙ Settings** on the dashboard. You can change:
+- alert thresholds, and turn each alert on or off;
+- which alerts play a sound, the volume, and the minimum gap between chimes;
+- the build order;
+- recording on/off and compact mode;
+- the player slot, port, and poll rate.
+
+**Save** validates the values (errors are shown next to the field) and writes `data\settings.json`. Thresholds, alert switches, and sound apply immediately. Fields tagged **restart** (connection and recording) apply the next time you start the coach. A new build order starts with the next match.
+
+You can also edit `data\settings.json` by hand while the coach is stopped; only the keys you include are changed from the defaults. If the file is invalid, the coach starts with defaults and shows the error in the settings panel without overwriting the file.
+
+### Step 10: Build orders
+
+Pick a build in **⚙ Settings → Build order**; the preview lists its steps and marks the ones the coach checks. Write your own as TOML files in `data\build_orders\` (Git-ignored) starting from [`aoe2coach/builds/TEMPLATE.toml`](aoe2coach/builds/TEMPLATE.toml), and validate them with:
+
+```powershell
+.\.venv\Scripts\python.exe -m aoe2coach builds
+```
+
+**Confirmation:** your build is listed with its step and check counts, and any error names the file and step. Checks can verify buildings (foundations count), units, researched technologies, age-ups and ages; villager assignments stay guidance. See [docs/build-orders.md](docs/build-orders.md).
+
+Build orders transcribed from purchased guides belong only in `data\build_orders\`; never commit them.
+
+### Step 11: Post-game summary
 
 When you stop `coach` with Ctrl+C it writes a summary next to its recording (`data\coach-<time>.summary.html`) and prints a short version. To summarize any recording yourself:
 
@@ -122,7 +154,7 @@ When you stop `coach` with Ctrl+C it writes a summary next to its recording (`da
 .\.venv\Scripts\python.exe -m aoe2coach summary --input data\coach-<time>.jsonl
 ```
 
-**Confirmation:** the terminal prints per-match idle-villager, Town Center idle, housed and stockpiling totals, age-up times, build-order timings and a villager count per minute, followed by `Report: ...summary.html`, which opens in your browser (`--no-browser` to skip; `--output` to choose the file). Summaries replay the recording through the same rules as the live dashboard, so the numbers match what it showed. Recordings that start mid-game, gaps in the data, alerts still active when recording stopped, and unreadable lines are called out; the match result is not claimed.
+**Confirmation:** the terminal prints per-match idle-villager, Town Center idle, housed and stockpiling totals, age-up times, age-up clicks vs. the build's planned villager count, build-step timings with villager counts, and a villager count per minute, followed by `Report: ...summary.html`, which opens in your browser (`--no-browser` to skip; `--output` to choose the file). Summaries replay the recording with the build order and settings that were in force (saved as metadata lines in the recording), so the numbers match what the dashboard showed. Recordings that start mid-game, gaps in the data, edited or missing build files, alerts still active when recording stopped, and unreadable lines are called out; the match result is not claimed.
 
 ## 2. How it works
 
@@ -150,9 +182,11 @@ Every line is standalone JSON:
 {"captured_at_utc":"2026-10-31T14:00:00+00:00","observation":{"world":1,"sequence":42,"game_time_ms":12345,"information_policy":"player_view","player":{},"entities":[]}}
 ```
 
-The example is a schema illustration, not real telemetry. The collector omits `object_types` and `technologies` catalogs from each observe call to reduce response size. Catalog information returned from `open` isn't persisted.
+The example is a schema illustration, not real telemetry. The collector omits `object_types` catalogs. `coach` requests the technology list (about 40 KB) on every 4th poll to check research steps and detect age-ups exactly. Catalog information returned from `open` isn't persisted.
 
-By default `record` and `coach` save compact recordings: samples whose game time has not advanced since the previous one (a paused game) are not saved, and fog-of-war entities (`access: "position"`, mostly trees and mines out of sight) are dropped from saved rows, which then carry `"omitted_position_only_entities": <count>`. On a real 14-minute session this reduced the file from 436 MB to 113 MB without affecting coaching or replay. Use `--full-recording` to keep the complete payload of every sample.
+`coach` recordings start with a `{"meta": {...}}` line (app version, build order id/name/digest, effective settings) and add another whenever the build order or settings change. Readers and replay skip these lines when counting observations.
+
+By default `record` and `coach` save compact recordings: samples whose game time has not advanced since the previous one (a paused game) are not saved, and fog-of-war entities (`access: "position"`, mostly trees and mines out of sight) are dropped from saved rows, which then carry `"omitted_position_only_entities": <count>`. The technology list is stored as `"technology_states": {"researched": [ids], "researching": [ids]}`. On a real 14-minute session this reduced the file from 436 MB to 113 MB without affecting coaching or replay. Use `--full-recording` to keep the complete payload of every sample.
 
 Deduplication uses `(world, sequence)` within a single recording process. New worlds are automatically detected, so you can record across multiple consecutive matches in one process. The file is appended to, not overwritten; use a unique output path per recording run.
 
@@ -160,7 +194,8 @@ Deduplication uses `(world, sequence)` within a single recording process. New wo
 
 - `ReadOnlyBridge.request` explicitly allows only `status`, `open`, `observe`, `map`, `close`; it cannot send `act` or `query` in this initial prototype.
 - `open` and each `observe` check `information_policy == "player_view"` (the bridge also supports omniscience, which this client rejects).
-- It does not use any external network or upload gameplay data. The coaching dashboard is served only on 127.0.0.1, rejects requests whose `Host` header is not local, and requires exclusive use of its port.
+- It does not use any external network or upload gameplay data. The coaching dashboard is served only on 127.0.0.1, rejects requests whose `Host` header is not local, and requires exclusive use of its port. Saving settings (`POST /settings`) also requires a same-origin `Origin` header and a JSON body (max 64 KB), so other websites open in your browser cannot change settings; values are validated before they are written.
+- The coach reads technology states (`technologies: "all"`) but, like everything else, sends no gameplay commands.
 - It still relies on a third-party injector in the game. Never assume it is permitted for multiplayer/competitive use.
 - Named-pipe errors 2 and 231 are retried for a bounded interval. The collector reconnects after recoverable session errors. Other remote protocol errors are surfaced rather than silently ignored.
 - Ctrl+C and exceptions trigger a best-effort `close`. If CONTROL crashes or is killed, the bridge will expire the session.
@@ -183,6 +218,9 @@ Deduplication uses `(world, sequence)` within a single recording process. New wo
 | Dashboard stuck on STALE | The coach process is running but receives no observations; check its terminal for bridge errors. |
 | Dashboard shows OFFLINE | The coach command stopped; restart it and reload the page. |
 | No sound | Click **Enable sound** after the page loads (browsers block audio until a click) and check the volume slider / Mute. |
+| Settings panel shows a red file error | `data\settings.json` is invalid; defaults are active. Fix the file or click Save to replace it. |
+| My build order is missing | Run `python -m aoe2coach builds`; it lists errors with file and step. Reopen settings after fixing. |
+| "Build order 'x' was not found" banner | The selected build file was removed or has errors; the coach fell back to the 22-pop build. |
 
 ## 6. Tests and limits
 
@@ -227,9 +265,10 @@ AoE2:DE single-player -> read-only collector -> local telemetry/catalogs
 Implement these milestones separately, with confirmation and tests at each stage:
 
 1. **Verify telemetry — done.** Villager, Town Center (training / researching / housed / idle), resource, and villager-queue signals were verified in live controlled tests; see [docs/telemetry.md](docs/telemetry.md) and `aoe2coach/telemetry.py`. Multiple TCs, later ages, and other civilizations are not yet verified.
-2. **Shared analysis — done.** `aoe2coach/analysis.py` raises and clears alert episodes in game time: idle villagers (5 s), idle Town Center (1 s; training or researching counts as busy), housed (1 s), house-soon warnings, stockpiling (above the next age-up cost by 400 in Dark/Feudal, 800 later, for 20 s), and standard 22-pop Scouts build-order reminders. Validated in a live match; see [docs/coaching-rules.md](docs/coaching-rules.md).
+2. **Shared analysis — done.** `aoe2coach/analysis.py` raises and clears alert episodes in game time: idle villagers (5 s), idle Town Center (1 s; training or researching counts as busy), housed (1 s), house-soon warnings, stockpiling (above the next age-up cost by 400 in Dark/Feudal, 800 later, for 20 s), and build-order reminders. These are the defaults; all are adjustable in Settings. Validated in a live match; see [docs/coaching-rules.md](docs/coaching-rules.md).
 3. **Local browser dashboard — done.** `aoe2-collect coach` runs one bridge session, the shared rules, an optional compact recording, and a dark large-text page at 127.0.0.1:8765 with grouped alerts, LIVE/PAUSED/STALE/OFFLINE status, resources with stockpile highlight, and the build-order checklist. A two-tone chime (volume slider, mute) sounds at most once every 2 s, plus a red screen-edge flash. Validated in a live match.
 4. **Post-game summaries — done.** `aoe2-collect summary` (and `coach` on exit) replays a recording through the same `Coach` and writes an HTML report plus terminal text: idle-villager, Town Center idle, housed and stockpiling episodes, age-up times, build-order timings and villagers over time, with incomplete-data notes. Tests check parity with the live dashboard pipeline; a real 14-minute recording (436 MB) summarizes in about 5 s.
+5. **Settings and selectable build orders — done.** A dashboard settings panel backed by `data\settings.json`, TOML build orders (built-in plus your own in `data\build_orders\`), building/unit/research/age checks, a training view, and build adherence in summaries. Research checks use technology states verified in a live probe.
 
 Possible next steps: verify multiple Town Centers and Castle/Imperial Age telemetry, suppress housed alerts at the 200 population cap, verify task-specific villager types (forager, hunter, miners) to check villager assignments, and add more build orders.
 

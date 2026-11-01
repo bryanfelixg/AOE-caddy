@@ -1,31 +1,27 @@
 """Shared coaching rules: turn a sequence of PlayerState snapshots into alert episodes.
 
 All durations use game time, so pauses and game speed do not distort them.
-The same Coach drives live alerts and offline (post-game) analysis.
+The same Coach drives live alerts and offline (post-game) analysis. Thresholds
+come from Settings; build-order reminders come from a BuildOrder.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Callable, Iterable, Literal
+from typing import Iterable, Literal
 
+from .build_orders import BuildOrder, BuildStep, GuidanceStep, anonymous, default_build
+from .settings import Settings
 from .telemetry import PlayerState, TownCenterState
 
-VILLAGER_IDLE_MS = 5_000
-TC_IDLE_MS = 1_000
-HOUSED_MS = 1_000
-STOCKPILE_MS = 20_000
-# Excess above the next age-up cost that counts as stockpiling, by current age (0 = Dark).
-STOCKPILE_LIMIT = {0: 400, 1: 400, 2: 800, 3: 800}
+__all__ = ["Alert", "AlertEvent", "AlertKind", "BuildStep", "Coach", "MAX_GAP_MS", "NEXT_AGE_COST"]
+
 # Standard age-up costs; civilization discounts are not modelled.
 NEXT_AGE_COST: dict[int, dict[str, int]] = {0: {"food": 500}, 1: {"food": 800, "gold": 200},
                                             2: {"food": 1000, "gold": 800}, 3: {}}
 # Unobserved game time longer than this restarts pending episode timers instead of counting it.
 MAX_GAP_MS = 5_000
-HOUSE_SOON_HEADROOM = 2
-
-HOUSE, BARRACKS, MILL, STABLE, LUMBER_CAMP = 70, 12, 68, 101, 562
-SCOUT_CAVALRY = 448
+HOUSE_TYPE_ID = 70
 
 
 class AlertKind(str, Enum):
@@ -60,61 +56,6 @@ class AlertEvent:
 
 
 @dataclass(frozen=True)
-class BuildStep:
-    id: str
-    message: str
-    due: Callable[[PlayerState], bool]
-    done: Callable[[PlayerState], bool]
-    grace_ms: int = 10_000
-
-
-def _researching(state: PlayerState) -> bool:
-    return any(tc.state is TownCenterState.RESEARCHING for tc in state.town_centers)
-
-
-# Standard 22-pop Scouts (Dark Age -> Feudal). Only checks verified telemetry can confirm.
-SCOUTS_22_POP: tuple[BuildStep, ...] = (
-    BuildStep("lumber_camp", "Build a lumber camp - villagers 7-10 go to wood",
-              due=lambda s: s.villager_count >= 8, done=lambda s: s.has_building(LUMBER_CAMP)),
-    BuildStep("mill", "Build a mill at berries - villagers 12-15 forage",
-              due=lambda s: s.villager_count >= 13, done=lambda s: s.has_building(MILL)),
-    BuildStep("click_feudal", "22 pop: research Feudal Age (500 food)",
-              due=lambda s: s.current_age == 0 and s.villager_count >= 21 and not _researching(s),
-              done=lambda s: (s.current_age or 0) >= 1, grace_ms=3_000),
-    BuildStep("barracks", "Build a barracks while advancing - the stable requires it",
-              due=lambda s: (s.current_age == 0 and s.villager_count >= 21 and _researching(s))
-              or (s.current_age or 0) >= 1,
-              done=lambda s: s.has_building(BARRACKS), grace_ms=15_000),
-    BuildStep("stable", "Feudal Age: build a stable",
-              due=lambda s: (s.current_age or 0) >= 1 and s.has_building(BARRACKS, finished_only=True),
-              done=lambda s: s.has_building(STABLE)),
-    BuildStep("scouts", "Train 3 scout cavalry from the stable",
-              due=lambda s: s.has_building(STABLE, finished_only=True),
-              done=lambda s: s.unit_counts.get(SCOUT_CAVALRY, 0) >= 4, grace_ms=30_000),
-)
-
-# Informational villager assignments for the same build (not checked).
-SCOUTS_22_POP_PLAN: tuple[tuple[int, int, str], ...] = (
-    (1, 6, "Sheep (first villagers build 2 houses)"),
-    (7, 10, "Wood + lumber camp"),
-    (11, 11, "Lure the first boar"),
-    (12, 15, "Berries + mill"),
-    (16, 17, "Lure the second boar / sheep"),
-    (18, 20, "Wood (second lumber camp)"),
-    (21, 21, "Food (farm)"),
-)
-
-
-def next_villager_task(villager_count: int) -> str:
-    """Assignment for the next villager under the 22-pop Scouts plan."""
-    upcoming = villager_count + 1
-    for first, last, task in SCOUTS_22_POP_PLAN:
-        if first <= upcoming <= last:
-            return task
-    return "Feudal Age: farms and wood; keep villagers coming"
-
-
-@dataclass(frozen=True)
 class _Condition:
     kind: AlertKind
     subject: str
@@ -123,28 +64,66 @@ class _Condition:
     sound: bool
 
 
+def _ms(seconds: float) -> int:
+    return int(round(seconds * 1000))
+
+
 class Coach:
-    def __init__(self, build_order: Iterable[BuildStep] = SCOUTS_22_POP):
-        self.build_order = tuple(build_order)
+    def __init__(self, build_order: BuildOrder | Iterable[BuildStep] | None = None,
+                 settings: Settings | None = None):
+        self.settings = settings or Settings()
+        self.build = self._as_build(build_order)
+        self.pending_build: BuildOrder | None = None
+        self.state: PlayerState | None = None
         self._world: int | None = None
         self._last_time: int | None = None
+        self._tech: tuple[int, frozenset[int], frozenset[int]] | None = None
         self._started: dict[tuple[AlertKind, str], int] = {}
         self._active: dict[tuple[AlertKind, str], Alert] = {}
         self._done_steps: set[str] = set()
+
+    @staticmethod
+    def _as_build(build_order: BuildOrder | Iterable[BuildStep] | None) -> BuildOrder:
+        if build_order is None:
+            return default_build()
+        if isinstance(build_order, BuildOrder):
+            return build_order
+        return anonymous(build_order)
+
+    @property
+    def build_order(self) -> tuple[BuildStep, ...]:
+        return self.build.checks
 
     @property
     def active_alerts(self) -> tuple[Alert, ...]:
         return tuple(sorted(self._active.values(), key=lambda a: a.raised_ms))
 
-    def build_progress(self, state: PlayerState) -> list[tuple[BuildStep, str]]:
+    def apply_settings(self, settings: Settings) -> None:
+        """Takes effect from the next update; disabled alerts clear then."""
+        self.settings = settings
+
+    def select_build(self, build: BuildOrder) -> bool:
+        """Use `build` now if no match has been seen, otherwise from the next match. Returns True if in force now."""
+        if self._world is None or (build.id == self.build.id and build.digest == self.build.digest):
+            self.build, self.pending_build = build, None
+            return True
+        self.pending_build = build
+        return False
+
+    def guidance(self, state: PlayerState | None = None) -> tuple[GuidanceStep | None, GuidanceStep | None]:
+        state = state or self.state
+        return self.build.guidance(state) if state is not None else (None, None)
+
+    def build_progress(self, state: PlayerState | None = None) -> list[tuple[BuildStep, str]]:
         """Each build step with status 'done', 'alert', 'due' (within grace) or 'pending'."""
+        state = state or self.state
         progress = []
-        for step in self.build_order:
+        for step in self.build.checks:
             if step.id in self._done_steps:
                 status = "done"
             elif (AlertKind.BUILD_ORDER, step.id) in self._active:
                 status = "alert"
-            elif step.due(state):
+            elif state is not None and step.due(state):
                 status = "due"
             else:
                 status = "pending"
@@ -160,11 +139,16 @@ class Coach:
             self._active.clear()
             self._done_steps.clear()
             self._last_time = None
+            self._tech = None
+            if self.pending_build is not None:
+                self.build, self.pending_build = self.pending_build, None
         if self._last_time is not None and now - self._last_time > MAX_GAP_MS:
             for key in self._started:
                 if key not in self._active:
                     self._started[key] = now
         self._world, self._last_time = state.world, now
+        state = self._carry_technologies(state)
+        self.state = state
 
         conditions = {(c.kind, c.subject): c for c in self._conditions(state)}
         for key in [k for k in self._started if k not in conditions]:
@@ -180,38 +164,60 @@ class Coach:
                 events.append(AlertEvent("raised", alert, state.world, now))
         return events
 
+    def _carry_technologies(self, state: PlayerState) -> PlayerState:
+        """Technologies are fetched every few polls; reuse the latest known states in between."""
+        if state.researched_ids is not None and state.researching_ids is not None:
+            self._tech = (state.world, state.researched_ids, state.researching_ids)
+            return state
+        if self._tech is not None and self._tech[0] == state.world:
+            return replace(state, researched_ids=self._tech[1], researching_ids=self._tech[2])
+        return state
+
     def _conditions(self, state: PlayerState) -> list[_Condition]:
-        out = [_Condition(AlertKind.VILLAGER_IDLE, f"villager:{v.id}", "Idle villager", VILLAGER_IDLE_MS, True)
-               for v in state.idle_villagers]
-        tc_message = ("Town Center idle and housed - build a house" if state.housing_headroom == 0
-                      else "Town Center idle - queue a villager")
-        out += [_Condition(AlertKind.TC_IDLE, f"tc:{tc.id}", tc_message, TC_IDLE_MS, True)
-                for tc in state.town_centers if tc.state is TownCenterState.IDLE]
-        if any(tc.state is TownCenterState.HOUSED for tc in state.town_centers):
-            out.append(_Condition(AlertKind.HOUSED, "player", "Housed - build a house", HOUSED_MS, True))
-        elif (state.housing_headroom is not None and 0 < state.housing_headroom <= HOUSE_SOON_HEADROOM
-              and not any(b.type_id == HOUSE and not b.finished for b in state.buildings)):
+        alerts = self.settings.alerts
+        out: list[_Condition] = []
+        if alerts.villager_idle.enabled:
+            out += [_Condition(AlertKind.VILLAGER_IDLE, f"villager:{v.id}", "Idle villager",
+                               _ms(alerts.villager_idle.threshold_s), alerts.villager_idle.sound)
+                    for v in state.idle_villagers]
+        if alerts.tc_idle.enabled:
+            tc_message = ("Town Center idle and housed - build a house" if state.housing_headroom == 0
+                          else "Town Center idle - queue a villager")
+            out += [_Condition(AlertKind.TC_IDLE, f"tc:{tc.id}", tc_message, _ms(alerts.tc_idle.threshold_s),
+                               alerts.tc_idle.sound)
+                    for tc in state.town_centers if tc.state is TownCenterState.IDLE]
+        housed = any(tc.state is TownCenterState.HOUSED for tc in state.town_centers)
+        if housed and alerts.housed.enabled:
+            out.append(_Condition(AlertKind.HOUSED, "player", "Housed - build a house",
+                                  _ms(alerts.housed.threshold_s), alerts.housed.sound))
+        elif (not housed and alerts.house_soon.enabled and state.housing_headroom is not None
+              and 0 < state.housing_headroom <= alerts.house_soon.headroom
+              and not any(b.type_id == HOUSE_TYPE_ID and not b.finished for b in state.buildings)):
             out.append(_Condition(AlertKind.HOUSE_SOON, "player",
-                                  f"Only {state.housing_headroom} population room left - build a house", 0, False))
-        out += self._stockpile(state)
-        for step in self.build_order:
+                                  f"Only {state.housing_headroom} population room left - build a house", 0,
+                                  alerts.house_soon.sound))
+        if alerts.stockpile.enabled:
+            out += self._stockpile(state)
+        for step in self.build.checks:
             if step.id in self._done_steps:
                 continue
             if step.done(state):
                 self._done_steps.add(step.id)
-            elif step.due(state):
-                out.append(_Condition(AlertKind.BUILD_ORDER, step.id, step.message, step.grace_ms, False))
+            elif step.due(state) and alerts.build_order.enabled:
+                out.append(_Condition(AlertKind.BUILD_ORDER, step.id, step.message, step.grace_ms,
+                                      alerts.build_order.sound))
         return out
 
-    @staticmethod
-    def _stockpile(state: PlayerState) -> list[_Condition]:
-        if state.resources is None or state.current_age not in STOCKPILE_LIMIT:
+    def _stockpile(self, state: PlayerState) -> list[_Condition]:
+        cfg = self.settings.alerts.stockpile
+        if state.resources is None or state.current_age not in NEXT_AGE_COST:
             return []
-        limit, cost = STOCKPILE_LIMIT[state.current_age], NEXT_AGE_COST.get(state.current_age, {})
+        limit = cfg.limit_dark_feudal if state.current_age <= 1 else cfg.limit_castle_imperial
+        cost = NEXT_AGE_COST[state.current_age] if cfg.allow_age_up_savings else {}
         out = []
         for name in ("food", "wood", "stone", "gold"):
             amount = getattr(state.resources, name)
             if amount - cost.get(name, 0) > limit:
                 out.append(_Condition(AlertKind.STOCKPILE, name, f"{amount} {name} banked - spend it",
-                                      STOCKPILE_MS, False))
+                                      _ms(cfg.threshold_s), cfg.sound))
         return out

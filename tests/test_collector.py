@@ -74,3 +74,37 @@ def test_defaults_keep_full_recording(tmp_path):
     rows = [json.loads(line) for line in output.read_text().splitlines()]
     assert len(rows) == 2 and all(len(r["observation"]["entities"]) == 3 for r in rows)
     assert all("omitted_position_only_entities" not in r for r in rows)
+
+def test_technologies_every_nth_poll_compacted_and_meta_lines(tmp_path):
+    payloads, seq = [], iter(range(1, 100))
+
+    def fake(player, request):
+        op = request["operation"]
+        if op == "status":
+            return {"ok": True, "data": {"state": "ready"}}
+        if op == "open":
+            return {"ok": True, "data": {"session": "abc", "information_policy": "player_view"}}
+        if op == "close":
+            return {"ok": True, "data": {}}
+        payloads.append(request["payload"]["technologies"])
+        n = next(seq)
+        data = {"world": 1, "sequence": n, "game_time_ms": n * 500, "information_policy": "player_view",
+                "entities": []}
+        if request["payload"]["technologies"] == "all":
+            data["technologies"] = [{"id": 22, "state": 3, "cost": []}, {"id": 101, "state": 2, "cost": []},
+                                    {"id": 8, "state": 1, "cost": []}]
+        return {"ok": True, "data": data}
+
+    metas = iter([{"build": "a"}, {"build": "a"}, {"build": "b"}, {"build": "b"}, {"build": "b"}])
+    seen = []
+    output = tmp_path / "tech.jsonl"
+    record(ReadOnlyBridge(1, fake), output, hz=10, count=5, technologies_every=4, compact_technologies=True,
+           on_observation=lambda o: seen.append("technologies" in o), meta=lambda: next(metas))
+    assert payloads == ["all", "none", "none", "none", "all"]
+    assert seen == [True, False, False, False, True]  # callbacks get the full list
+    rows = [json.loads(line) for line in output.read_text().splitlines()]
+    assert [("meta" in r) for r in rows] == [True, False, False, True, False, False, False]
+    assert rows[0]["meta"] == {"build": "a"} and rows[3]["meta"] == {"build": "b"}
+    first = rows[1]["observation"]
+    assert "technologies" not in first
+    assert first["technology_states"] == {"researched": [22], "researching": [101]}

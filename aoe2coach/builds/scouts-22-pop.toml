@@ -1,0 +1,80 @@
+# Generic 22-pop Scouts into Feudal Age. Original AOE-caddy example.
+format = 1
+id = "scouts-22-pop"
+name = "22-pop Scouts (generic)"
+civilizations = ["Any"]
+description = "Standard 21 villagers + scout, click Feudal, barracks while advancing, stable and 3 scouts."
+source = "AOE-caddy built-in example"
+
+[[steps]]
+villagers = 1
+age = "dark"
+task = "Villagers 1-6: sheep (first villagers build 2 houses)"
+
+[[steps]]
+villagers = 7
+task = "Villagers 7-10: wood"
+
+[[steps]]
+id = "lumber_camp"
+villagers = 8
+task = "Build a lumber camp - villagers 7-10 go to wood"
+build = "Lumber Camp"
+
+[[steps]]
+villagers = 11
+task = "Villager 11: lure the first boar"
+
+[[steps]]
+villagers = 12
+task = "Villagers 12-15: berries"
+
+[[steps]]
+id = "mill"
+villagers = 13
+task = "Build a mill at berries - villagers 12-15 forage"
+build = "Mill"
+
+[[steps]]
+villagers = 16
+task = "Villagers 16-17: lure the second boar / sheep"
+
+[[steps]]
+villagers = 18
+task = "Villagers 18-20: wood (second lumber camp)"
+
+[[steps]]
+id = "click_feudal"
+villagers = 21
+task = "22 pop: research Feudal Age (500 food)"
+note = "Villager 21 goes to food (farm)."
+age_up = "feudal"
+grace_s = 3
+
+[[steps]]
+id = "barracks"
+villagers = 21
+task = "Build a barracks while advancing - the stable requires it"
+while_advancing = true
+build = "Barracks"
+grace_s = 15
+
+[[steps]]
+villagers = 21
+age = "feudal"
+task = "Feudal Age: farms and wood; keep villagers coming"
+
+[[steps]]
+id = "stable"
+villagers = 21
+task = "Feudal Age: build a stable"
+requires = ["Barracks"]
+build = "Stable"
+
+[[steps]]
+id = "scouts"
+villagers = 21
+task = "Train 3 scout cavalry from the stable"
+requires = ["Stable"]
+train = { name = "Scout Cavalry", count = 4 }
+grace_s = 30

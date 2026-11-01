@@ -9,11 +9,17 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
 from .analysis import MAX_GAP_MS, AlertEvent, AlertKind, Coach
+from .build_orders import AGE_TITLES, BuildOrder, Library, load_library
+from .settings import SettingsError, from_dict
 from .telemetry import AGE_NAMES, TelemetryError, extract
 
 LOG = logging.getLogger(__name__)
 LATE_START_MS = 10_000
 RESOURCES = ("food", "wood", "stone", "gold")
+
+
+class MetaRecord(dict):
+    """A `{"meta": ...}` line from a recording: the build order and settings in force from here on."""
 
 
 def clock(ms: int) -> str:
@@ -46,8 +52,18 @@ class Episodes:
 class StepTiming:
     id: str
     message: str
+    target_villagers: int | None = None
     reminded_ms: int | None = None
     done_ms: int | None = None
+    done_villagers: int | None = None
+
+
+@dataclass
+class AgeUp:
+    target: int
+    clicked_ms: int | None = None
+    clicked_villagers: int | None = None
+    planned_villagers: int | None = None
 
 
 @dataclass
@@ -61,11 +77,14 @@ class MatchSummary:
     gap_ms: int = 0
     final_age: int | None = None
     final_villagers: int = 0
+    build_name: str = ""
+    build_notes: list[str] = field(default_factory=list)
     villager_idle: Episodes = field(default_factory=Episodes)
     tc_idle: Episodes = field(default_factory=Episodes)
     housed: Episodes = field(default_factory=Episodes)
     stockpile: dict[str, Episodes] = field(default_factory=lambda: {r: Episodes() for r in RESOURCES})
     age_reached: dict[int, int] = field(default_factory=dict)
+    age_ups: dict[int, AgeUp] = field(default_factory=dict)
     build_steps: list[StepTiming] = field(default_factory=list)
     villager_timeline: list[tuple[int, int]] = field(default_factory=list)
 
@@ -79,7 +98,7 @@ class MatchSummary:
 
 
 class RecordingReader:
-    """Yields observations from a JSONL recording, skipping (and counting) unreadable lines."""
+    """Yields observations (and MetaRecord lines) from a JSONL recording, skipping unreadable lines."""
 
     def __init__(self, path: Path):
         self.path = path
@@ -91,7 +110,11 @@ class RecordingReader:
                 if not line.strip():
                     continue
                 try:
-                    observation = json.loads(line)["observation"]
+                    row = json.loads(line)
+                    if isinstance(row, dict) and isinstance(row.get("meta"), dict):
+                        yield MetaRecord(row["meta"])
+                        continue
+                    observation = row["observation"]
                 except (ValueError, KeyError, TypeError):
                     self.skipped_lines += 1
                     continue
@@ -101,23 +124,58 @@ class RecordingReader:
                     self.skipped_lines += 1
 
 
-def summarize(observations: Iterable[Mapping[str, Any]], coach: Coach | None = None) -> list[MatchSummary]:
-    """One summary per match (`world`) using the live alert rules."""
+class _BuildTracker:
+    """Applies recording metadata to the Coach and remembers notes about it."""
+
+    def __init__(self, coach: Coach, library: Library | None):
+        self.coach = coach
+        self.library = library
+        self.notes: list[str] = []
+        self.seen_meta = False
+
+    def apply(self, meta: Mapping[str, Any]) -> None:
+        self.seen_meta = True
+        try:
+            self.coach.apply_settings(from_dict(meta.get("settings") or {}))
+        except SettingsError as exc:
+            self.notes.append(f"Recorded settings could not be used ({exc}); defaults applied.")
+        info = meta.get("build")
+        if not isinstance(info, Mapping) or self.library is None:
+            return
+        build: BuildOrder | None = self.library.get(str(info.get("id")))
+        name = info.get("name") or info.get("id")
+        if build is None:
+            self.notes.append(f"Build order '{name}' used during the match is no longer available; "
+                              f"steps are evaluated with '{self.coach.build.name}'.")
+            return
+        if info.get("digest") and info.get("digest") != build.digest:
+            self.notes.append(f"Build order '{build.name}' has been edited since this recording; "
+                              "steps are evaluated with the current file.")
+        self.coach.select_build(build)
+
+
+def summarize(observations: Iterable[Mapping[str, Any]], coach: Coach | None = None,
+              library: Library | None = None) -> list[MatchSummary]:
+    """One summary per match (`world`) using the live alert rules and the recorded build/settings."""
     coach = coach or Coach()
+    tracker = _BuildTracker(coach, library if library is not None else load_library())
     matches: dict[int, MatchSummary] = {}
     current: MatchSummary | None = None
     next_minute = 0
     for observation in observations:
+        if isinstance(observation, MetaRecord):
+            tracker.apply(observation)
+            continue
         try:
             state = extract(observation)
         except TelemetryError:
             continue
         t = state.game_time_ms
-        if current is None or state.world != current.world:
+        new_match = current is None or state.world != current.world
+        if new_match:
             player = observation.get("player")
             civ = player.get("civilization_name") if isinstance(player, Mapping) else None
             current = MatchSummary(state.world, civ if isinstance(civ, str) else None, t, t)
-            current.build_steps = [StepTiming(step.id, step.message) for step in coach.build_order]
             matches[state.world] = current
             next_minute = t
         elif t - current.last_ms > MAX_GAP_MS:
@@ -128,6 +186,9 @@ def summarize(observations: Iterable[Mapping[str, Any]], coach: Coach | None = N
             target = matches.get(event.world)
             if target is not None:
                 _apply(target, event, ended_by_new_match=event.world != state.world)
+        state = coach.state or state
+        if new_match:
+            _start_build(current, coach, tracker)
 
         current.samples += 1
         current.last_ms = max(current.last_ms, t)
@@ -135,17 +196,35 @@ def summarize(observations: Iterable[Mapping[str, Any]], coach: Coach | None = N
         current.final_villagers = state.villager_count
         if state.current_age is not None and state.current_age not in current.age_reached:
             current.age_reached[state.current_age] = t
+        age = state.current_age or 0
+        if state.age_up_in_progress and age + 1 in current.age_ups:
+            click = current.age_ups[age + 1]
+            if click.clicked_ms is None:
+                click.clicked_ms, click.clicked_villagers = t, state.villager_count
         if t >= next_minute:
             current.villager_timeline.append((t, state.villager_count))
             next_minute = (t // 60_000 + 1) * 60_000
         for timing, (_, status) in zip(current.build_steps, coach.build_progress(state)):
             if status == "done" and timing.done_ms is None:
-                timing.done_ms = t
+                timing.done_ms, timing.done_villagers = t, state.villager_count
 
     if current is not None:
         for alert in coach.active_alerts:
             _add_episode(current, alert.kind, alert.subject, current.last_ms - alert.started_ms, ongoing=True)
     return list(matches.values())
+
+
+def _start_build(summary: MatchSummary, coach: Coach, tracker: _BuildTracker) -> None:
+    build = coach.build
+    villagers = {s.id: s.villagers for s in build.steps}
+    summary.build_name = build.name
+    summary.build_notes = list(tracker.notes)
+    if not tracker.seen_meta:
+        summary.build_notes.append(f"Recording has no build-order metadata; evaluated with '{build.name}'.")
+    summary.build_steps = [StepTiming(step.id, step.message, villagers.get(step.id)) for step in build.checks]
+    summary.age_ups = {age: AgeUp(age, planned_villagers=vils) for age, vils in build.age_up_targets}
+    for age in (1, 2, 3):
+        summary.age_ups.setdefault(age, AgeUp(age))
 
 
 def _apply(summary: MatchSummary, event: AlertEvent, *, ended_by_new_match: bool) -> None:
@@ -170,7 +249,7 @@ def _add_episode(summary: MatchSummary, kind: AlertKind, subject: str, duration_
 
 
 def _data_notes(m: MatchSummary, skipped_lines: int) -> list[str]:
-    notes = []
+    notes = list(m.build_notes)
     if m.starts_late:
         notes.append(f"Recording started at {clock(m.first_ms)} game time; earlier play is not included.")
     if m.gaps:
@@ -192,11 +271,34 @@ def _ages(m: MatchSummary) -> str:
 
 def _step_text(m: MatchSummary, s: StepTiming) -> str:
     if s.done_ms is not None:
-        done = "before recording began" if s.done_ms == m.first_ms and m.starts_late else f"done at {clock(s.done_ms)}"
+        if s.done_ms == m.first_ms and m.starts_late:
+            done = "before recording began"
+        else:
+            done = f"done at {clock(s.done_ms)} with {s.done_villagers} villagers"
+            if s.target_villagers is not None:
+                done += f" (plan: {s.target_villagers})"
     else:
         done = "not done"
     reminder = f", reminder shown at {clock(s.reminded_ms)}" if s.reminded_ms is not None else ""
     return done + reminder
+
+
+def _age_up_lines(m: MatchSummary) -> list[str]:
+    lines = []
+    for age, up in sorted(m.age_ups.items()):
+        if up.clicked_ms is None and up.planned_villagers is None:
+            continue
+        name = AGE_TITLES[age]
+        plan = f" (plan: {up.planned_villagers} villagers)" if up.planned_villagers is not None else ""
+        if up.clicked_ms is not None:
+            reached = m.age_reached.get(age)
+            lines.append(f"{name}: clicked at {clock(up.clicked_ms)} with {up.clicked_villagers} villagers{plan}"
+                         + (f", reached {clock(reached)}" if reached is not None else ""))
+        elif age in m.age_reached and m.age_reached[age] > m.first_ms:
+            lines.append(f"{name}: reached at {clock(m.age_reached[age])}; click not observed{plan}")
+        elif (m.final_age or 0) < age:
+            lines.append(f"{name}: not clicked{plan}")
+    return lines
 
 
 def render_text(summaries: list[MatchSummary], skipped_lines: int = 0) -> str:
@@ -213,7 +315,8 @@ def render_text(summaries: list[MatchSummary], skipped_lines: int = 0) -> str:
         banked = [f"{r} {clock(e.total_ms)}" for r, e in m.stockpile.items() if e.count]
         lines.append(f"  Stockpiling:      {', '.join(banked) or 'none'}")
         lines.append(f"  Ages:             {_ages(m)}")
-        lines.append("  Build order:")
+        lines += [f"  Age-up:           {line}" for line in _age_up_lines(m)]
+        lines.append(f"  Build order ({m.build_name}):")
         lines += [f"    - {s.message}: {_step_text(m, s)}" for s in m.build_steps]
         trend = " | ".join(f"{clock(t)} {count}" for t, count in m.villager_timeline)
         lines.append(f"  Villagers:        {trend + ' | ' if trend else ''}end {m.final_villagers}")
@@ -255,6 +358,7 @@ def render_html(summaries: list[MatchSummary], source: str, skipped_lines: int =
                 ("Housed", m.housed.describe())]
         rows += [(f"Stockpiling {r}", ep.describe()) for r, ep in m.stockpile.items()]
         rows.append(("Ages", _ages(m)))
+        rows += [("Age-up", line) for line in _age_up_lines(m)]
         metric_rows = "".join(f"<tr><th>{e(k)}</th><td>{e(v)}</td></tr>" for k, v in rows)
         steps = "".join(f"<tr class='{'done' if s.done_ms is not None else 'missed'}'><th>{e(s.message)}</th>"
                         f"<td>{e(_step_text(m, s))}</td></tr>" for s in m.build_steps)
@@ -265,7 +369,7 @@ def render_html(summaries: list[MatchSummary], source: str, skipped_lines: int =
             f"<p class='muted'>{e(clock(m.duration_ms))} of game time recorded "
             f"({e(clock(m.first_ms))} &rarr; {e(clock(m.last_ms))}), {m.samples} samples</p>"
             f"<h3>Coaching metrics</h3><table>{metric_rows}</table>"
-            f"<h3>Build order - 22-pop Scouts</h3><table>{steps}</table>"
+            f"<h3>Build order - {e(m.build_name)}</h3><table>{steps}</table>"
             f"<h3>Villagers over game time</h3>{_chart(m)}"
             f"<h3>Data quality</h3><ul>{notes}</ul></section>")
     body = "".join(sections) or "<p>No usable observations in this recording.</p>"

@@ -158,3 +158,31 @@ def test_rejects_missing_player_id(obs):
     del obs["player"]["id"]
     with pytest.raises(TelemetryError, match="player.id"):
         extract(obs)
+
+
+def test_technology_states_full_and_compact(obs):
+    assert extract(obs).researched_ids is None and extract(obs).researching_ids is None
+    obs["technologies"] = [{"id": 22, "state": 3}, {"id": 101, "state": 2}, {"id": 8, "state": 1}, "junk"]
+    state = extract(obs)
+    assert state.researched_ids == {22} and state.researching_ids == {101} and state.age_up_in_progress
+    del obs["technologies"]
+    obs["technology_states"] = {"researched": [22, 202], "researching": []}
+    state = extract(obs)
+    assert state.researched_ids == {22, 202} and not state.age_up_in_progress
+
+
+def test_age_up_falls_back_to_tc_research_without_technology_data(obs):
+    _entity(obs, TC_ID).update(progress_type=103, train_count=0)
+    assert extract(obs).age_up_in_progress  # could be Loom; exact only with technology data
+    obs["technologies"] = [{"id": 22, "state": 2}]
+    assert not extract(obs).age_up_in_progress
+
+
+def test_unit_and_building_names_include_garrisoned_units(obs):
+    scout = next(e for e in obs["entities"] if e.get("type_id") == 448)
+    obs["entities"].append({"access": "full", "id": 1, "owner": 1, "type_id": 448, "class_id": 947,
+                            "category": 70, "garrison_object_id": TC_ID})
+    state = extract(obs)
+    assert state.unit_count("scout  CAVALRY") == 2 and scout["type_name"] == "Scout Cavalry"
+    assert state.building_count("House") == 7 and state.building_count("house", finished_only=True) == 5
+    assert state.building_count("Stable") == 1 and state.building_count("Stable", finished_only=True) == 0

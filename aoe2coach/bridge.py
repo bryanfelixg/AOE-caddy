@@ -161,8 +161,9 @@ class ReadOnlyBridge:
         self.session = session
         return data
 
-    def observe(self) -> dict[str, Any]:
-        data = self.request("observe", {"object_types": "none", "technologies": "none"})
+    def observe(self, *, technologies: bool = False) -> dict[str, Any]:
+        """Newest observation; `technologies=True` adds the ~40 KB technology state list."""
+        data = self.request("observe", {"object_types": "none", "technologies": "all" if technologies else "none"})
         if data.get("information_policy") != "player_view":
             raise BridgeProtocolError("Observation is not player_view")
         return data

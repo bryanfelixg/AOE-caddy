@@ -9,7 +9,7 @@ import pytest
 from aoe2coach.analysis import Coach
 from aoe2coach.bridge import ReadOnlyBridge
 from aoe2coach.collector import record
-from aoe2coach.dashboard import CoachPipeline, Hub, build_view, make_server, replay
+from aoe2coach.dashboard import CoachPipeline, Hub, SettingsController, build_view, make_server, replay
 from aoe2coach.telemetry import PlayerState, Resources, TownCenter, TownCenterState, Villager
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "observation_feudal_p1.json").read_text(encoding="utf-8"))
@@ -75,7 +75,13 @@ def test_view_build_order_progress_from_real_fixture():
     assert status["lumber_camp"] == "done" and status["mill"] == "done" and status["stable"] == "done"
     assert status["scouts"] == "pending"  # stable is still a foundation
     assert view["connection"]["status"] == "live"
-    assert view["next_villager"]
+    training = view["training"]
+    assert training["build"]["id"] == "scouts-22-pop"
+    assert training["age"]["actual"] == "Feudal Age" and training["age"]["target"] is None
+    # Feudal with 15 villagers (early click-up): the first Feudal step is current.
+    assert training["current"]["task"] == "Feudal Age: farms and wood; keep villagers coming"
+    assert training["next"]["task"] == "Feudal Age: build a stable"
+    assert view["sound"] == {"volume": 80, "min_gap_s": 2.0}
 
 
 # --- pipeline -------------------------------------------------------------------------
@@ -238,6 +244,138 @@ def test_event_stream_pushes_updates(server):
     hub.publish({"n": 2})
     assert next_event() == {"n": 2}
     conn.close()
+
+
+# --- settings API -----------------------------------------------------------------------
+
+USER_BUILD = """
+format = 1
+id = "my-build"
+name = "My build"
+civilizations = ["Franks"]
+[[steps]]
+villagers = 6
+task = "Sheep"
+[[steps]]
+villagers = 8
+task = "Lumber camp"
+build = "Lumber Camp"
+"""
+
+
+@pytest.fixture
+def api(tmp_path):
+    builds = tmp_path / "build_orders"
+    builds.mkdir()
+    (builds / "my-build.toml").write_text(USER_BUILD, encoding="utf-8")
+    (builds / "broken.toml").write_text("format = 1\nid = \n", encoding="utf-8")
+    hub = Hub()
+    pipeline = CoachPipeline(hub)
+    controller = SettingsController(pipeline, tmp_path / "settings.json", {"connection.port": 9000}, builds)
+    controller.start()
+    srv = make_server(hub, port=0, controller=controller)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    port = srv.server_address[1]
+    yield controller, pipeline, port, tmp_path
+    hub.close()
+    srv.shutdown()
+    srv.server_close()
+
+
+def post(port, body, *, origin=None, content_type="application/json", host=None):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    data = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
+    headers = {"Host": host or f"127.0.0.1:{port}", "Content-Type": content_type,
+               "Origin": origin if origin is not None else f"http://127.0.0.1:{port}"}
+    conn.request("POST", "/settings", body=data, headers=headers)
+    resp = conn.getresponse()
+    payload = json.loads(resp.read() or b"{}")
+    conn.close()
+    return resp.status, payload
+
+
+def test_get_settings_lists_builds_errors_schema_and_overrides(api):
+    _, _, port, _ = api
+    resp, conn = get(port, "/settings")
+    data = json.loads(resp.read())
+    conn.close()
+    assert resp.status == 200
+    assert {b["id"] for b in data["builds"]} == {"scouts-22-pop", "my-build"}
+    assert any("broken.toml" in e for e in data["build_errors"])
+    assert data["overrides"] == {"connection.port": 9000}
+    assert data["effective"]["connection"]["port"] == 9000 and data["saved"]["connection"]["port"] == 8765
+    assert data["active_build"] == "scouts-22-pop" and data["pending_build"] is None
+    assert any(f["path"] == "alerts.tc_idle.threshold_s" for f in data["schema"])
+
+
+def test_post_saves_applies_live_and_reports_restart(api):
+    controller, pipeline, port, tmp_path = api
+    status, data = post(port, {"alerts": {"tc_idle": {"threshold_s": 3}}, "sound": {"volume": 30},
+                               "connection": {"hz": 4}})
+    assert status == 200, data
+    saved = json.loads((tmp_path / "settings.json").read_text())
+    assert saved["alerts"]["tc_idle"]["threshold_s"] == 3 and saved["sound"]["volume"] == 30
+    assert pipeline.coach.settings.alerts.tc_idle.threshold_s == 3
+    assert pipeline.hub.snapshot()[1]["sound"]["volume"] == 30
+    assert data["restart_required"] == ["connection.hz"]
+    assert pipeline.coach.settings.connection.port == 9000  # command-line override still wins
+
+
+def test_build_change_is_immediate_before_a_match_and_deferred_during_one(api):
+    controller, pipeline, port, _ = api
+    status, data = post(port, {"build_order": "my-build"})
+    assert status == 200 and data["build_applies"] == "now" and pipeline.coach.build.id == "my-build"
+    pipeline.on_observation(obs_at(1_000))
+    status, data = post(port, {"build_order": "scouts-22-pop"})
+    assert data["build_applies"] == "next match" and data["pending_build"] == "scouts-22-pop"
+    assert pipeline.hub.snapshot()[1]["training"]["pending"] == "22-pop Scouts (generic)"
+    pipeline.on_observation(obs_at(500, world=99))
+    assert pipeline.coach.build.id == "scouts-22-pop"
+
+
+@pytest.mark.parametrize("kwargs, code", [
+    ({"origin": "http://evil.example"}, 403),
+    ({"origin": ""}, 403),
+    ({"host": "evil.example:1"}, 403),
+    ({"content_type": "text/plain"}, 415),
+])
+def test_post_rejects_cross_site_and_wrong_content_type(api, kwargs, code):
+    _, pipeline, port, tmp_path = api
+    status, _ = post(port, {"sound": {"volume": 1}}, **kwargs)
+    assert status == code
+    assert not (tmp_path / "settings.json").exists() and pipeline.coach.settings.sound.volume == 80
+
+
+def test_post_validation_errors_and_bad_json(api):
+    _, _, port, tmp_path = api
+    status, data = post(port, {"alerts": {"tc_idle": {"threshold_s": 9999}}, "build_order": "nope"})
+    assert status == 400 and any("between 0 and 600" in e for e in data["errors"])
+    status, data = post(port, {"build_order": "nope"})
+    assert status == 400 and data["errors"] == ["build_order: unknown build order 'nope'"]
+    status, data = post(port, b"{not json")
+    assert status == 400 and not (tmp_path / "settings.json").exists()
+
+
+def test_post_too_large(api):
+    _, _, port, _ = api
+    status, _ = post(port, b"{" + b" " * (70 * 1024) + b"}")
+    assert status == 413
+
+
+def test_corrupt_settings_file_falls_back_to_defaults_with_message(tmp_path):
+    (tmp_path / "settings.json").write_text("{oops", encoding="utf-8")
+    controller = SettingsController(CoachPipeline(Hub()), tmp_path / "settings.json", user_dir=None)
+    assert controller.saved.connection.port == 8765
+    assert "could not be used" in controller.payload()["file_error"]
+    assert (tmp_path / "settings.json").read_text() == "{oops"
+
+
+def test_unknown_selected_build_falls_back_with_notice(tmp_path):
+    (tmp_path / "settings.json").write_text(json.dumps({"build_order": "gone"}), encoding="utf-8")
+    pipeline = CoachPipeline(Hub())
+    SettingsController(pipeline, tmp_path / "settings.json", user_dir=None).start()
+    assert pipeline.coach.build.id == "scouts-22-pop"
+    assert "'gone' was not found" in pipeline.hub.snapshot()[1]["notice"]
 
 
 # --- collector callbacks ----------------------------------------------------------------

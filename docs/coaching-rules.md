@@ -12,31 +12,39 @@ Implemented in [`aoe2coach/analysis.py`](../aoe2coach/analysis.py) on top of the
 
 ## Alerts
 
-| Alert | Condition | Threshold | Sound |
+Values below are the defaults; each threshold, on/off switch and sound can be changed in the dashboard settings (`data\settings.json`). Changes apply from the next observation; disabling an alert clears it.
+
+| Alert | Condition | Default threshold | Default sound |
 |---|---|---|---|
 | Idle villager | Villager `idle == true` (one alert per villager) | 5 s | yes |
 | Town Center idle | TC not training, researching, or housed. Message says to build a house when headroom is 0 | 1 s | yes |
 | Housed | A TC has villagers queued but `housing_headroom` is 0 | 1 s | yes |
-| House soon | Headroom is 1–2 and no house foundation exists | immediate | no |
-| Stockpiling | A resource exceeds the next age-up cost by more than 400 (Dark/Feudal) or 800 (Castle/Imperial) | 20 s | no |
+| House soon | Headroom is 1–2 (setting) and no house foundation exists | immediate | no |
+| Stockpiling | A resource exceeds the next age-up cost by more than 400 (Dark/Feudal) or 800 (Castle/Imperial); the age-up allowance can be turned off | 20 s | no |
 | Build order | Reminder step is due but not done (see below) | per step | no |
 
 Next age-up costs used for the stockpile allowance: Feudal 500 food; Castle 800 food + 200 gold; Imperial 1000 food + 800 gold. Civilization discounts are not modelled.
 
-## Build order: standard 22-pop Scouts
+## Build orders
 
-Reminders only use signals telemetry can confirm (villager count, age, TC research, buildings incl. foundations, unit counts). Once a step is done it stays done for the match.
+The selected build order (see [build-orders.md](build-orders.md)) supplies the reminders and the training view. Changing it during a match takes effect when the next match starts; before any match is seen it applies immediately. Once a step is done it stays done for the match.
+
+Age-up detection uses the technology list when available (Feudal/Castle/Imperial Age `state == 2`); without it any Town Center research counts, so Loom or Wheelbarrow could be mistaken for an age-up. Technology states are fetched every 4th poll and reused between fetches.
+
+### Built-in: standard 22-pop Scouts
+
+[`scouts-22-pop.toml`](../aoe2coach/builds/scouts-22-pop.toml) reproduces the original hard-coded rules (a test compares them on every realistic Dark/Feudal combination of villagers, buildings and TC research):
 
 | Step | Due when | Done when | Grace |
 |---|---|---|---|
 | Lumber camp | 8+ villagers | Lumber camp exists (foundation counts) | 10 s |
 | Mill | 13+ villagers | Mill exists | 10 s |
-| Click Feudal | Dark Age, 21+ villagers (22 pop with the scout), TC not researching | Feudal Age reached | 3 s |
-| Barracks | Feudal research running with 21+ villagers, or Feudal reached | Barracks exists | 15 s |
+| Click Feudal | Dark Age, 21+ villagers (22 pop with the scout), not advancing | Feudal Age reached | 3 s |
+| Barracks | Advancing with 21+ villagers, or Feudal reached | Barracks exists | 15 s |
 | Stable | Feudal reached and barracks finished | Stable exists | 10 s |
 | Scouts | Stable finished | 4+ Scout Cavalry (starting scout + 3) | 30 s |
 
-Villager assignments (shown as guidance, not checked, because task-specific villager types such as forager/hunter are not yet verified): 1–6 sheep (first villagers build 2 houses), 7–10 wood + lumber camp, 11 lure boar, 12–15 berries + mill, 16–17 second boar/sheep, 18–20 wood, 21 farm, then click Feudal.
+Villager assignments are guidance only, because task-specific villager types are not verified.
 
 ## Live validation
 
@@ -44,6 +52,6 @@ A 2-minute run on a fresh match (CONTROL 1.1.5) stayed silent while the TC train
 
 ## Known limitations
 
-- Several villagers idling together raise one alert each; the dashboard groups them into one line and plays at most one chime every 2 s.
+- Several villagers idling together raise one alert each; the dashboard groups them into one line and plays at most one chime per configured gap (default 2 s).
 - At the 200 population cap, housed / TC-idle alerts are not suppressed yet.
 - Multiple Town Centers each raise their own idle alert; later ages and other civilizations are not yet verified.

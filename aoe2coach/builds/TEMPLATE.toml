@@ -1,0 +1,62 @@
+# AOE-caddy build-order template. Copy this file to data/build_orders/<your-id>.toml and edit it.
+# Format reference: docs/build-orders.md. Check your file with:  python -m aoe2coach builds
+format = 1
+id = "my-build"                      # lowercase letters, digits, - or _; must be unique
+name = "My build"
+civilizations = ["Franks"]           # optional, shown in the dashboard
+description = "One-line summary."    # optional
+source = "My own notes"              # optional
+
+# Steps are listed in the order you play them. A step becomes current when you have
+# at least `villagers` villagers in its age (or are already in a later age).
+
+[[steps]]
+villagers = 6
+age = "dark"                         # dark, feudal, castle or imperial (defaults to the previous step's age)
+task = "6 villagers to sheep"        # shown on the dashboard
+note = "Build 2 houses first."       # optional extra line
+
+# Steps with a check are verified by the coach. If a check is not done within
+# `grace_s` game-seconds after the step becomes due, a reminder appears.
+
+[[steps]]
+id = "lumber-camp"                   # optional; used in reminders and the post-game summary
+villagers = 8
+task = "Lumber camp"
+build = "Lumber Camp"                # in-game building name; a foundation counts as started
+grace_s = 20
+
+[[steps]]
+villagers = 18
+task = "Research Loom"
+research = "Loom"                    # known name (see docs) or numeric technology id
+
+[[steps]]
+villagers = 18
+task = "Click up to Feudal Age"
+age_up = "feudal"                    # done once the age is reached; no reminder while advancing
+grace_s = 5
+
+[[steps]]
+villagers = 18
+task = "Barracks while advancing"
+while_advancing = true               # only due once the age-up has been clicked
+build = "Barracks"
+
+[[steps]]
+villagers = 18
+age = "feudal"
+task = "Stable"
+requires = ["Barracks"]              # only due once these buildings are finished
+build = { name = "Stable", count = 1, finished = false }
+
+[[steps]]
+villagers = 18
+task = "3 scouts"
+requires = ["Stable"]
+train = { name = "Scout Cavalry", count = 4 }   # counts units alive now, including the starting scout
+
+[[steps]]
+villagers = 22
+task = "Reach Castle Age"
+reach_age = "castle"
