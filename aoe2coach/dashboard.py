@@ -17,10 +17,9 @@ import time
 from typing import Any, Callable
 
 from .analysis import AlertKind, Coach, next_villager_task
-from .telemetry import PlayerState, TelemetryError, extract
+from .telemetry import AGE_NAMES, PlayerState, TelemetryError, extract
 
 LOG = logging.getLogger(__name__)
-AGE_NAMES = {0: "Dark Age", 1: "Feudal Age", 2: "Castle Age", 3: "Imperial Age"}
 _SEVERITY = {AlertKind.VILLAGER_IDLE: 0, AlertKind.HOUSED: 0, AlertKind.TC_IDLE: 0,
              AlertKind.HOUSE_SOON: 1, AlertKind.STOCKPILE: 1, AlertKind.BUILD_ORDER: 2}
 _SEVERITY_NAMES = ("high", "medium", "low")
@@ -213,6 +212,21 @@ def run_coach(*, player: int, port: int, hz: float, output: Path | None, open_br
         hub.close()
         server.shutdown()
         server.server_close()
+        if output is not None and output.exists() and output.stat().st_size > 0:
+            _write_post_game_summary(output)
+
+
+def _write_post_game_summary(recording: Path) -> None:
+    from .summary import write_summary
+
+    print("Writing post-game summary...", flush=True)
+    try:
+        report, text = write_summary(recording)
+    except Exception as exc:  # a summary failure must not hide how the coach stopped
+        LOG.warning("Could not write post-game summary: %s", exc)
+        return
+    print(text, flush=True)
+    print(f"Report: {report.resolve()}", flush=True)
 
 
 class _LoopbackServer(ThreadingHTTPServer):

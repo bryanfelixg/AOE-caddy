@@ -22,6 +22,7 @@ PROGRESS_RESEARCHING = 103
 # Order matches the Resources dataclass fields.
 RESOURCE_IDS = {"food": 0, "wood": 1, "stone": 2, "gold": 3}
 _RESOURCE_FACTS = {"food": "FOOD_AMOUNT", "wood": "WOOD_AMOUNT", "stone": "STONE_AMOUNT", "gold": "GOLD_AMOUNT"}
+AGE_NAMES = {0: "Dark Age", 1: "Feudal Age", 2: "Castle Age", 3: "Imperial Age"}
 
 
 class TelemetryError(ValueError):

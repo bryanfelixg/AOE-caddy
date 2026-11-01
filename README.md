@@ -6,7 +6,7 @@ This is a small Windows-only Python collector for the **AoE2Control Agent Bridge
 
 **Repository:** https://github.com/bryanfelixg/AOE-caddy
 
-The Python package remains `aoe2coach`, with the `aoe2-collect` command. Verified telemetry extractors ([docs/telemetry.md](docs/telemetry.md)), the coaching rules engine ([docs/coaching-rules.md](docs/coaching-rules.md)) and a live local dashboard (`aoe2-collect coach`, Step 8) exist; post-game summaries are planned, not implemented.
+The Python package remains `aoe2coach`, with the `aoe2-collect` command. It includes verified telemetry extractors ([docs/telemetry.md](docs/telemetry.md)), the coaching rules engine ([docs/coaching-rules.md](docs/coaching-rules.md)), a live local dashboard (`aoe2-collect coach`, Step 8) and post-game summaries (`aoe2-collect summary`, Step 9).
 
 ## 1. Windows setup
 
@@ -114,6 +114,16 @@ The coach owns the player's bridge session, so do not run `record` for the same 
 
 Alert rules are documented in [docs/coaching-rules.md](docs/coaching-rules.md).
 
+### Step 9: Post-game summary
+
+When you stop `coach` with Ctrl+C it writes a summary next to its recording (`data\coach-<time>.summary.html`) and prints a short version. To summarize any recording yourself:
+
+```powershell
+.\.venv\Scripts\python.exe -m aoe2coach summary --input data\coach-<time>.jsonl
+```
+
+**Confirmation:** the terminal prints per-match idle-villager, Town Center idle, housed and stockpiling totals, age-up times, build-order timings and a villager count per minute, followed by `Report: ...summary.html`, which opens in your browser (`--no-browser` to skip; `--output` to choose the file). Summaries replay the recording through the same rules as the live dashboard, so the numbers match what it showed. Recordings that start mid-game, gaps in the data, alerts still active when recording stopped, and unreadable lines are called out; the match result is not claimed.
+
 ## 2. How it works
 
 ```text
@@ -216,9 +226,11 @@ AoE2:DE single-player -> read-only collector -> local telemetry/catalogs
 
 Implement these milestones separately, with confirmation and tests at each stage:
 
-1. **Verify telemetry — done.** Villager, Town Center (training / researching / housed / idle), resource, and villager-queue signals were verified in live controlled tests; see [docs/telemetry.md](docs/telemetry.md) and `aoe2coach/telemetry.py`. Unit counts (`object_types`) are fetched live periodically, not stored in recordings. Multiple TCs, later ages, and other civilizations are not yet verified.
+1. **Verify telemetry — done.** Villager, Town Center (training / researching / housed / idle), resource, and villager-queue signals were verified in live controlled tests; see [docs/telemetry.md](docs/telemetry.md) and `aoe2coach/telemetry.py`. Multiple TCs, later ages, and other civilizations are not yet verified.
 2. **Shared analysis — done.** `aoe2coach/analysis.py` raises and clears alert episodes in game time: idle villagers (5 s), idle Town Center (1 s; training or researching counts as busy), housed (1 s), house-soon warnings, stockpiling (above the next age-up cost by 400 in Dark/Feudal, 800 later, for 20 s), and standard 22-pop Scouts build-order reminders. Validated in a live match; see [docs/coaching-rules.md](docs/coaching-rules.md).
 3. **Local browser dashboard — done.** `aoe2-collect coach` runs one bridge session, the shared rules, an optional compact recording, and a dark large-text page at 127.0.0.1:8765 with grouped alerts, LIVE/PAUSED/STALE/OFFLINE status, resources with stockpile highlight, and the build-order checklist. A two-tone chime (volume slider, mute) sounds at most once every 2 s, plus a red screen-edge flash. Validated in a live match.
-4. **Post-game summaries.** Reuse the live event rules for idle durations, production gaps, resource alerts, and build-order adherence. Mark incomplete data and verify live/offline parity.
+4. **Post-game summaries — done.** `aoe2-collect summary` (and `coach` on exit) replays a recording through the same `Coach` and writes an HTML report plus terminal text: idle-villager, Town Center idle, housed and stockpiling episodes, age-up times, build-order timings and villagers over time, with incomplete-data notes. Tests check parity with the live dashboard pipeline; a real 14-minute recording (436 MB) summarizes in about 5 s.
+
+Possible next steps: verify multiple Town Centers and Castle/Imperial Age telemetry, suppress housed alerts at the 200 population cap, verify task-specific villager types (forager, hunter, miners) to check villager assignments, and add more build orders.
 
 The configured 2 Hz is a polling target, not a delivery guarantee. Game speed and bridge latency affect when alerts arrive; measure a 1-game-second TC rule against game timestamps without promising 1-second wall-clock delivery. No automated gameplay, multiplayer use, cloud telemetry upload, or injected coaching overlay is planned.
