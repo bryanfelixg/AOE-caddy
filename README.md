@@ -6,7 +6,7 @@ This is a small Windows-only Python collector for the **AoE2Control Agent Bridge
 
 **Repository:** https://github.com/bryanfelixg/AOE-caddy
 
-The Python package remains `aoe2coach`, with the `aoe2-collect` command. Coaching analysis and a dashboard are planned, not implemented.
+The Python package remains `aoe2coach`, with the `aoe2-collect` command. Verified telemetry extractors exist ([docs/telemetry.md](docs/telemetry.md)); coaching analysis and a dashboard are planned, not implemented.
 
 ## 1. Windows setup
 
@@ -43,7 +43,7 @@ Optional activation: `.\.venv\Scripts\Activate.ps1`. If execution policy blocks 
 .\.venv\Scripts\python.exe -m aoe2coach --help
 ```
 
-**Confirmation:** all five current tests pass; help lists `status`, `record`, and `snapshot`. These are fake-transport tests, not proof of a live game connection.
+**Confirmation:** all tests pass; help lists `status`, `record`, and `snapshot`. These use fake transports and a recorded fixture, not a live game connection.
 
 ### Step 4: Configure the game bridge
 
@@ -148,7 +148,7 @@ Deduplication uses `(world, sequence)` within a single recording process. New wo
 
 Run `python -m pytest -q` in your environment on Windows, Linux or macOS; the unit tests use an injected fake transport, so the game is not required. **The actual Windows named-pipe path requires on-machine integration testing.**
 
-Local setup validation passed with Python 3.14.4 and CONTROL 1.1.5: five unit tests, live player-1 `ready` / `player_view` status, a snapshot, and 20 unique JSONL observations with advancing game time. This validates collection in that environment, not all game versions or future coaching features.
+Local setup validation passed with Python 3.14.4 and CONTROL 1.1.5: unit tests, live player-1 `ready` / `player_view` status, a snapshot, and 20 unique JSONL observations with advancing game time. This validates collection in that environment, not all game versions or future coaching features.
 
 ## 7. Publishing source to GitHub
 
@@ -177,7 +177,7 @@ Inspect each result before proceeding. Reuse an existing correct origin instead 
 
 **Confirmation:** only intended source/docs are staged, push succeeds, local HEAD equals the remote main hash, and files appear on GitHub. Use Git's trusted credential flow if authentication is required; do not put tokens in chat, URLs, or project files.
 
-## 8. Coaching roadmap (not implemented)
+## 8. Coaching roadmap
 
 ```text
 AoE2:DE single-player -> read-only collector -> local telemetry/catalogs
@@ -186,8 +186,8 @@ AoE2:DE single-player -> read-only collector -> local telemetry/catalogs
 
 Implement these milestones separately, with confirmation and tests at each stage:
 
-1. **Verify telemetry and persist catalogs.** Identify villagers (including variants), Town Centers, ownership, resources, production/activity signals, and match boundaries using actual fields and catalogs. Do not guess type IDs or idle semantics. Keep the raw recording format compatible.
-2. **Shared analysis.** Target villager idle episodes lasting **5 game-seconds** and Town Center idle episodes lasting **1 game-second**, plus resource stockpiling and build-order reminders. Confirm TC production semantics, stockpile thresholds, and a specific build order/civilization before implementing their rules. Test exact thresholds, activity resumption, match resets, missing/stale observations, and pauses.
+1. **Verify telemetry — done.** Villager, Town Center (training / researching / housed / idle), resource, and villager-queue signals were verified in live controlled tests; see [docs/telemetry.md](docs/telemetry.md) and `aoe2coach/telemetry.py`. Unit counts (`object_types`) are fetched live periodically, not stored in recordings. Multiple TCs, later ages, and other civilizations are not yet verified.
+2. **Shared analysis.** Target villager idle episodes lasting **5 game-seconds**, Town Center idle episodes lasting **1 game-second** (training or researching counts as busy), a separate **housed** alert at 1 game-second, plus resource stockpiling and build-order reminders. Confirm stockpile thresholds and a specific build order/civilization before implementing those rules. Test exact thresholds, activity resumption, match resets, missing/stale observations, and pauses.
 3. **Local browser dashboard beside the game.** Show live advice and connection freshness, with visual and sound alerts once per idle episode. Include sound enable/mute controls and visual fallback for browser autoplay restrictions. Bind to loopback and share a single collection session; do not open another player session for the display.
 4. **Post-game summaries.** Reuse the live event rules for idle durations, production gaps, resource alerts, and build-order adherence. Mark incomplete data and verify live/offline parity.
 
